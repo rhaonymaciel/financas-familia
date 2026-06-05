@@ -1103,7 +1103,7 @@ function Configuracoes({ toast }) {
 }
 
 // ── SIDEBAR DESKTOP ─────────────────────────────────────────────────────────
-function Sidebar({ tab, setTab }) {
+function Sidebar({ tab, setTab, sair }) {
   const navItems=[
     {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
     {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>},
@@ -1160,6 +1160,7 @@ function Login({ onLogin }) {
 
 // ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
 export default function App() {
+  // ── Todos os hooks primeiro — antes de qualquer return ──
   const [tab,setTab]=useState('dashboard')
   const [mes,setMes]=useState(todayYM)
   const [toastData,setToastData]=useState(null)
@@ -1169,9 +1170,6 @@ export default function App() {
   const [cards,setCards]=useState([])
   const [members,setMembers]=useState([])
   const desktop=useDesktop()
-  const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
-  const toast=(msg,type='success')=>setToastData({msg,type})
-  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   const reloadGlobal=useCallback(async()=>{
     const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
@@ -1181,7 +1179,14 @@ export default function App() {
     ])
     setCategories(cats||[]); setCards(cds||[]); setMembers(mbrs||[])
   },[])
-  useEffect(()=>{ reloadGlobal() },[reloadGlobal])
+  useEffect(()=>{ if(authed) reloadGlobal() },[reloadGlobal,authed])
+
+  // ── Funções ──
+  const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
+  const toast=(msg,type='success')=>setToastData({msg,type})
+
+  // ── Guard de autenticação — depois de todos os hooks ──
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   const mobileTabs=[
     {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
@@ -1208,7 +1213,7 @@ export default function App() {
   return (
     <AppCtx.Provider value={{categories,cards,members,reloadGlobal}}>
       <div className="app-shell">
-        {desktop&&<Sidebar tab={tab} setTab={setTab}/>}
+        {desktop&&<Sidebar tab={tab} setTab={setTab} sair={sair}/>}
         <div className="page-content">
           {desktop?<div className="page-inner">{content}</div>:content}
         </div>
