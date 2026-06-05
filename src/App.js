@@ -1078,8 +1078,7 @@ function Configuracoes({ toast }) {
           </div>
         </ConfigSection>
 
-        <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:8,padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>
-      </div>
+    <ConfigSection title="🗑️ Dados"><div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button className="btn-secondary" onClick={async()=>{ if(!window.confirm('Limpar lançamentos do mês atual?')) return; await supabase.from('installments').delete().eq('month_ref', new Date().toISOString().slice(0,7)); await supabase.from('transactions').delete().eq('month_ref', new Date().toISOString().slice(0,7)); window.location.reload() }}>🗓️ Limpar mês atual</button><button style={{padding:'10px 18px',background:'#FCEBEB',color:'#A32D2D',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,cursor:'pointer'}} onClick={async()=>{ if(!window.confirm('⚠️ Apagar TODOS os lançamentos?')) return; if(!window.confirm('Tem certeza? Não pode ser desfeito.')) return; await supabase.from('installments').delete().neq('id','00000000-0000-0000-0000-000000000000'); await supabase.from('transactions').delete().neq('id','00000000-0000-0000-0000-000000000000'); window.location.reload() }}>🗑️ Limpar tudo</button></div></ConfigSection><div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:8,padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>  </div>
     </div>
   )
 }
