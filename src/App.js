@@ -1107,18 +1107,57 @@ function Sidebar({ tab, setTab }) {
         <div className="sidebar-section-label">Mais</div>
         {moreItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
       </nav>
+      <div style={{padding:'12px 16px',borderTop:'1px solid var(--gray-100)'}}>
+        <button onClick={sair} style={{width:'100%',padding:'8px',background:'none',border:'none',cursor:'pointer',fontSize:13,color:'var(--gray-500)',textAlign:'left',fontFamily:'var(--font-body)'}}>🚪 Sair</button>
+      </div>
     </aside>
+  )
+}
   )
 }
 
 // ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
+const SENHA_APP = 'maciel2026'
+
+function Login({ onLogin }) {
+  const [senha, setSenha] = useState('')
+  const [erro, setErro] = useState(false)
+  const tentar = () => {
+    if (senha === SENHA_APP) { localStorage.setItem('fm_auth','1'); onLogin() }
+    else { setErro(true); setTimeout(() => setErro(false), 2000) }
+  }
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--gray-100)',padding:24}}>
+      <div style={{background:'var(--white)',borderRadius:24,padding:'32px 28px',width:'100%',maxWidth:360,boxShadow:'var(--shadow-lg)',textAlign:'center'}}>
+        <div style={{fontSize:40,marginBottom:12}}>💰</div>
+        <h1 style={{fontFamily:'var(--font-display)',fontSize:24,fontWeight:400,marginBottom:6}}>Finanças Maciel</h1>
+        <p style={{fontSize:13,color:'var(--gray-500)',marginBottom:24}}>Digite a senha para acessar</p>
+        <input
+          type="password"
+          className="form-input"
+          placeholder="Senha"
+          value={senha}
+          onChange={e=>setSenha(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&tentar()}
+          style={{textAlign:'center',fontSize:18,letterSpacing:4,marginBottom:12}}
+          autoFocus
+        />
+        {erro && <p style={{fontSize:13,color:'var(--red)',marginBottom:8}}>Senha incorreta</p>}
+        <button className="btn-primary" onClick={tentar} style={{marginTop:4}}>Entrar</button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(!!localStorage.getItem('fm_auth'))
+  if (!authed) return <Login onLogin={() => setAuthed(true)} />
   const [tab,setTab]=useState('dashboard')
   const [mes,setMes]=useState(todayYM)
   const [toastData,setToastData]=useState(null)
   const [showMais,setShowMais]=useState(false)
   const desktop=useDesktop()
-  const toast=(msg,type='success')=>setToastData({msg,type})
+  const toast=(msg,type='success')=>setToastData({msg,type})const sair = () => { localStorage.removeItem('fm_auth'); setAuthed(false) }
 
   const [categories,setCategories]=useState([])
   const [cards,setCards]=useState([])
