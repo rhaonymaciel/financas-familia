@@ -104,6 +104,7 @@ function Dashboard({ mes, setMes }) {
   const [loading,setLoading]=useState(true)
   const [parcelas,setParcelas]=useState([])
   const desktop=useDesktop()
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -838,6 +839,7 @@ function Relatorios() {
   const [searching,setSearching]=useState(false)
   const ano=new Date().getFullYear()
   const desktop=useDesktop()
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   useEffect(()=>{
     const load=async()=>{
@@ -1078,6 +1080,24 @@ function Configuracoes({ toast }) {
           </div>
         </ConfigSection>
 
+        <ConfigSection title="🗑️ Dados">
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button className="btn-secondary" onClick={async()=>{
+              if(!window.confirm('Limpar lançamentos do mês atual?')) return
+              const mesAtual=new Date().toISOString().slice(0,7)
+              await supabase.from('installments').delete().eq('month_ref',mesAtual)
+              await supabase.from('transactions').delete().eq('month_ref',mesAtual)
+              window.location.reload()
+            }}>🗓️ Limpar mês atual</button>
+            <button style={{padding:'10px 18px',background:'#FCEBEB',color:'#A32D2D',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,cursor:'pointer'}} onClick={async()=>{
+              if(!window.confirm('⚠️ Apagar TODOS os lançamentos? Esta ação não pode ser desfeita.')) return
+              if(!window.confirm('Tem certeza? Todos os meses serão apagados.')) return
+              await supabase.from('installments').delete().neq('id','00000000-0000-0000-0000-000000000000')
+              await supabase.from('transactions').delete().neq('id','00000000-0000-0000-0000-000000000000')
+              window.location.reload()
+            }}>🗑️ Limpar tudo</button>
+          </div>
+        </ConfigSection>
         <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:8,padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>
       </div>
     </div>
@@ -1108,15 +1128,13 @@ function Sidebar({ tab, setTab }) {
         {moreItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
       </nav>
       <div style={{padding:'12px 16px',borderTop:'1px solid var(--gray-100)'}}>
-        <button onClick={sair} style={{width:'100%',padding:'8px',background:'none',border:'none',cursor:'pointer',fontSize:13,color:'var(--gray-500)',textAlign:'left',fontFamily:'var(--font-body)'}}>🚪 Sair</button>
+        <button onClick={()=>{ localStorage.removeItem('fm_auth'); window.location.reload() }} style={{width:'100%',padding:'8px',background:'none',border:'none',cursor:'pointer',fontSize:13,color:'var(--gray-500)',textAlign:'left',fontFamily:'var(--font-body)'}}>🚪 Sair</button>
       </div>
     </aside>
   )
 }
-  )
-}
 
-// ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
+
 const SENHA_APP = 'maciel2026'
 
 function Login({ onLogin }) {
@@ -1132,32 +1150,27 @@ function Login({ onLogin }) {
         <div style={{fontSize:40,marginBottom:12}}>💰</div>
         <h1 style={{fontFamily:'var(--font-display)',fontSize:24,fontWeight:400,marginBottom:6}}>Finanças Maciel</h1>
         <p style={{fontSize:13,color:'var(--gray-500)',marginBottom:24}}>Digite a senha para acessar</p>
-        <input
-          type="password"
-          className="form-input"
-          placeholder="Senha"
-          value={senha}
-          onChange={e=>setSenha(e.target.value)}
-          onKeyDown={e=>e.key==='Enter'&&tentar()}
-          style={{textAlign:'center',fontSize:18,letterSpacing:4,marginBottom:12}}
-          autoFocus
-        />
-        {erro && <p style={{fontSize:13,color:'var(--red)',marginBottom:8}}>Senha incorreta</p>}
+        <input type="password" className="form-input" placeholder="Senha" value={senha}
+          onChange={e=>setSenha(e.target.value)} onKeyDown={e=>e.key==='Enter'&&tentar()}
+          style={{textAlign:'center',fontSize:18,letterSpacing:4,marginBottom:12}} autoFocus/>
+        {erro&&<p style={{fontSize:13,color:'var(--red)',marginBottom:8}}>Senha incorreta</p>}
         <button className="btn-primary" onClick={tentar} style={{marginTop:4}}>Entrar</button>
       </div>
     </div>
   )
 }
 
+// ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
 export default function App() {
-  const [authed, setAuthed] = useState(!!localStorage.getItem('fm_auth'))
-  if (!authed) return <Login onLogin={() => setAuthed(true)} />
   const [tab,setTab]=useState('dashboard')
   const [mes,setMes]=useState(todayYM)
   const [toastData,setToastData]=useState(null)
   const [showMais,setShowMais]=useState(false)
   const desktop=useDesktop()
-  const toast=(msg,type='success')=>setToastData({msg,type})const sair = () => { localStorage.removeItem('fm_auth'); setAuthed(false) }
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
+  const [authed,setAuthed]=useState(!!localStorage.getItem('fm_auth'))
+  const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
+  const toast=(msg,type='success')=>setToastData({msg,type})
 
   const [categories,setCategories]=useState([])
   const [cards,setCards]=useState([])
