@@ -1173,7 +1173,7 @@ export default function App() {
   const toast=(msg,type='success')=>setToastData({msg,type})
   if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
-   const reloadGlobal=useCallback(async()=>{
+  const reloadGlobal=useCallback(async()=>{
     const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
       supabase.from('categories').select('*').order('name'),
       supabase.from('cards').select('*').order('name'),
