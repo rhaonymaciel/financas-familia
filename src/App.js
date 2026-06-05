@@ -1084,17 +1084,117 @@ function Configuracoes({ toast }) {
   )
 }
 
-// ── SIDEBAR DESKTOP ───────────────────────────────────────────────────────────
+// ── SIDEBAR DESKTOP ─────────────────────────────────────────────────────────
 function Sidebar({ tab, setTab }) {
   const navItems=[
     {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
-    {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>},
+    {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>},
     {id:'novo',label:'Lançar',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>},
-    {id:'importar',label:'Fatura PDF',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
+    {id:'importar',label:'Fatura PDF',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>},
   ]
   const moreItems=[
-    {id:'parcelas',label:'Parcelas',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>},
+    {id:'parcelas',label:'Parcelas',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>},
     {id:'orcamentos',label:'Orçamentos',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>},
     {id:'relatorios',label:'Relatórios',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>},
-    {id:'recorrentes',label:'Recorrentes',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>},
-    {id:'config',label:'Configurações',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68
+    {id:'recorrentes',label:'Recorrentes',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/></svg>},
+    {id:'config',label:'Config.',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>},
+  ]
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-logo"><h2>Finanças Maciel</h2><p>Controle financeiro familiar</p></div>
+      <nav className="sidebar-nav">
+        {navItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
+        <div className="sidebar-section-label">Mais</div>
+        {moreItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
+      </nav>
+    </aside>
+  )
+}
+
+// ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab,setTab]=useState('dashboard')
+  const [mes,setMes]=useState(todayYM)
+  const [toastData,setToastData]=useState(null)
+  const [showMais,setShowMais]=useState(false)
+  const desktop=useDesktop()
+  const toast=(msg,type='success')=>setToastData({msg,type})
+
+  const [categories,setCategories]=useState([])
+  const [cards,setCards]=useState([])
+  const [members,setMembers]=useState([])
+
+  const reloadGlobal=useCallback(async()=>{
+    const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
+      supabase.from('categories').select('*').order('name'),
+      supabase.from('cards').select('*').order('name'),
+      supabase.from('members').select('*').order('name'),
+    ])
+    setCategories(cats||[]); setCards(cds||[]); setMembers(mbrs||[])
+  },[])
+  useEffect(()=>{ reloadGlobal() },[reloadGlobal])
+
+  const mobileTabs=[
+    {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
+    {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>},
+    {id:'novo',label:'Lançar',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>},
+    {id:'importar',label:'Fatura',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>},
+    {id:'mais',label:'Mais',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>},
+  ]
+
+  const content=(
+    <>
+      {tab==='dashboard'   && <Dashboard mes={mes} setMes={setMes}/>}
+      {tab==='lancamentos' && <Lancamentos mes={mes} setMes={setMes} toast={toast}/>}
+      {tab==='novo'        && <NovoLancamento mes={mes} toast={toast} onSaved={()=>setTab('lancamentos')}/>}
+      {tab==='importar'    && <ImportarJSON mes={mes} toast={toast}/>}
+      {tab==='parcelas'    && <Parcelas mes={mes} setMes={setMes}/>}
+      {tab==='orcamentos'  && <Orcamentos mes={mes} setMes={setMes}/>}
+      {tab==='relatorios'  && <Relatorios/>}
+      {tab==='recorrentes' && <Recorrentes mes={mes} toast={toast}/>}
+      {tab==='config'      && <Configuracoes toast={toast}/>}
+    </>
+  )
+
+  return (
+    <AppCtx.Provider value={{categories,cards,members,reloadGlobal}}>
+      <div className="app-shell">
+        {desktop&&<Sidebar tab={tab} setTab={setTab}/>}
+        <div className="page-content">
+          {desktop?<div className="page-inner">{content}</div>:content}
+        </div>
+
+        {!desktop&&showMais&&(
+          <div style={{position:'fixed',bottom:70,left:0,right:0,background:'var(--white)',borderTop:'1px solid var(--gray-100)',padding:'12px 16px',zIndex:99,boxShadow:'0 -4px 20px rgba(0,0,0,0.08)'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {[
+                {id:'parcelas',label:'Parcelas',icon:'💳'},
+                {id:'orcamentos',label:'Orçamentos',icon:'🎯'},
+                {id:'relatorios',label:'Relatórios',icon:'📊'},
+                {id:'recorrentes',label:'Recorrentes',icon:'🔁'},
+                {id:'config',label:'Config.',icon:'⚙️'},
+              ].map(t=>(
+                <button key={t.id} onClick={()=>{setTab(t.id);setShowMais(false)}} style={{padding:'14px',background:tab===t.id?'var(--green-pale)':'var(--gray-50)',border:`1px solid ${tab===t.id?'var(--green)':'var(--gray-100)'}`,borderRadius:12,cursor:'pointer',display:'flex',alignItems:'center',gap:10,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,color:tab===t.id?'var(--green)':'var(--gray-700)'}}>
+                  <span style={{fontSize:20}}>{t.icon}</span>{t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!desktop&&(
+          <nav className="bottom-nav">
+            {mobileTabs.map(t=>(
+              <button key={t.id} className={`nav-item ${(tab===t.id||(t.id==='mais'&&showMais))?'active':''}`}
+                onClick={()=>{ if(t.id==='mais'){setShowMais(v=>!v)}else{setTab(t.id);setShowMais(false)} }}>
+                {t.icon}{t.label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {toastData&&<Toast msg={toastData.msg} type={toastData.type} onHide={()=>setToastData(null)}/>}
+      </div>
+    </AppCtx.Provider>
+  )
+}
