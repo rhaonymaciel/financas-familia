@@ -104,7 +104,6 @@ function Dashboard({ mes, setMes }) {
   const [loading,setLoading]=useState(true)
   const [parcelas,setParcelas]=useState([])
   const desktop=useDesktop()
-  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -839,7 +838,6 @@ function Relatorios() {
   const [searching,setSearching]=useState(false)
   const ano=new Date().getFullYear()
   const desktop=useDesktop()
-  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   useEffect(()=>{
     const load=async()=>{
@@ -1167,9 +1165,9 @@ export default function App() {
   const [toastData,setToastData]=useState(null)
   const [showMais,setShowMais]=useState(false)
   const desktop=useDesktop()
-  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
   const [authed,setAuthed]=useState(!!localStorage.getItem('fm_auth'))
   const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
   const toast=(msg,type='success')=>setToastData({msg,type})
 
   const [categories,setCategories]=useState([])
