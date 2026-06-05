@@ -13,12 +13,16 @@ const fmt = n => Number(n).toLocaleString('pt-BR',{style:'currency',currency:'BR
 const fmtM = ym => { const [y,m]=ym.split('-'); return new Date(y,m-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'}) }
 const todayYM   = () => new Date().toISOString().slice(0,7)
 const todayDate = () => new Date().toISOString().slice(0,10)
-const useDesktop = () => { const [d,setD]=useState(window.innerWidth>=768); useEffect(()=>{ const h=()=>setD(window.innerWidth>=768); window.addEventListener('resize',h); return()=>window.removeEventListener('resize',h) },[]); return d }
+const useDesktop = () => {
+  const [d,setD] = useState(window.innerWidth>=768)
+  useEffect(()=>{ const h=()=>setD(window.innerWidth>=768); window.addEventListener('resize',h); return()=>window.removeEventListener('resize',h) },[])
+  return d
+}
 
-// Context global — evita re-render nos campos ao digitar
 const AppCtx = createContext({})
 const useApp = () => useContext(AppCtx)
 
+// ── Componentes definidos FORA de qualquer função — evita re-criação ao digitar
 function Toast({ msg, type, onHide }) {
   useEffect(()=>{ const t=setTimeout(onHide,2800); return()=>clearTimeout(t) },[onHide])
   return <div className={`toast ${type}`}>{msg}</div>
@@ -46,6 +50,25 @@ function Modal({ title, onClose, children }) {
         </div>
         {children}
       </div>
+    </div>
+  )
+}
+
+// Componentes de UI para Configurações — definidos no topo do módulo
+function ConfigSection({ title, children }) {
+  return (
+    <div className="form-card" style={{marginBottom:12}}>
+      <div style={{fontFamily:'var(--font-display)',fontSize:17,marginBottom:14,fontWeight:400}}>{title}</div>
+      {children}
+    </div>
+  )
+}
+
+function ConfigRow({ name, onDel }) {
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}>
+      <span style={{flex:1,fontSize:14}}>{name}</span>
+      <button className="btn-danger" style={{padding:'3px 10px',fontSize:12}} onClick={onDel}>Remover</button>
     </div>
   )
 }
@@ -88,35 +111,46 @@ function Dashboard({ mes, setMes }) {
         </div>
         <div className={desktop?'desktop-grid':'section'} style={!desktop?{paddingTop:0}:{}}>
           {catEntries.length>0&&(
-            <div><div className="section-title" style={desktop?{paddingTop:0}:{}}>Por categoria</div>
-            <div className="chart-card">{catEntries.slice(0,8).map(([cat,val],i)=>(
-              <div className="cat-bar-row" key={cat}>
-                <div className="cat-bar-name">{cat}</div>
-                <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/maxCat*100).toFixed(1)}%`,background:CAT_COLORS[i%CAT_COLORS.length]}}/></div>
-                <div className="cat-bar-val">{fmt(val)}</div>
+            <div>
+              <div className="section-title" style={desktop?{paddingTop:0}:{}}>Por categoria</div>
+              <div className="chart-card">
+                {catEntries.slice(0,8).map(([cat,val],i)=>(
+                  <div className="cat-bar-row" key={cat}>
+                    <div className="cat-bar-name">{cat}</div>
+                    <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/maxCat*100).toFixed(1)}%`,background:CAT_COLORS[i%CAT_COLORS.length]}}/></div>
+                    <div className="cat-bar-val">{fmt(val)}</div>
+                  </div>
+                ))}
               </div>
-            ))}</div></div>
+            </div>
           )}
           {Object.keys(byMember).length>0&&(
-            <div><div className="section-title" style={desktop?{paddingTop:0}:{}}>Por membro</div>
-            <div className="chart-card">{Object.entries(byMember).sort((a,b)=>b[1]-a[1]).map(([mbr,val],i)=>(
-              <div className="cat-bar-row" key={mbr}>
-                <div className="cat-bar-name">{mbr}</div>
-                <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
-                <div className="cat-bar-val">{fmt(val)}</div>
+            <div>
+              <div className="section-title" style={desktop?{paddingTop:0}:{}}>Por membro</div>
+              <div className="chart-card">
+                {Object.entries(byMember).sort((a,b)=>b[1]-a[1]).map(([mbr,val],i)=>(
+                  <div className="cat-bar-row" key={mbr}>
+                    <div className="cat-bar-name">{mbr}</div>
+                    <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
+                    <div className="cat-bar-val">{fmt(val)}</div>
+                  </div>
+                ))}
               </div>
-            ))}</div></div>
+            </div>
           )}
         </div>
-        <div className="section"><div className="section-title">Últimos lançamentos</div>
-          {txns.length===0?<div className="empty-state"><div className="icon">📭</div><h3>Nenhum lançamento</h3><p>Use "Lançar" para adicionar.</p></div>
-          :<div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>(
-            <div className="txn-item" key={t.id}>
-              <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
-              <div className="txn-info"><div className="txn-desc">{t.description}</div><div className="txn-meta">{t.category} · {t.date?.slice(5).replace('-','/')}</div></div>
-              <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
-            </div>
-          ))}</div>}
+        <div className="section">
+          <div className="section-title">Últimos lançamentos</div>
+          {txns.length===0
+            ?<div className="empty-state"><div className="icon">📭</div><h3>Nenhum lançamento</h3><p>Use "Lançar" para adicionar.</p></div>
+            :<div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>(
+              <div className="txn-item" key={t.id}>
+                <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+                <div className="txn-info"><div className="txn-desc">{t.description}</div><div className="txn-meta">{t.category} · {t.date?.slice(5).replace('-','/')}</div></div>
+                <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+              </div>
+            ))}</div>
+          }
         </div>
       </>}
     </div>
@@ -138,7 +172,11 @@ function Lancamentos({ mes, setMes, toast }) {
   },[mes])
   useEffect(()=>{ load() },[load])
 
-  const del=async id=>{ if(!window.confirm('Remover?'))return; await supabase.from('transactions').delete().eq('id',id); toast('Removido','success'); load() }
+  const del=async id=>{
+    if(!window.confirm('Remover?'))return
+    await supabase.from('transactions').delete().eq('id',id)
+    toast('Removido','success'); load()
+  }
   const saveEdit=async()=>{
     const {id,...rest}=editTxn
     await supabase.from('transactions').update({description:rest.description,amount:parseFloat(rest.amount),category:rest.category,member:rest.member,type:rest.type,date:rest.date,notes:rest.notes}).eq('id',id)
@@ -162,28 +200,31 @@ function Lancamentos({ mes, setMes, toast }) {
       </div>
       {loading?<div className="loading"><div className="spinner"/></div>:(
         <div className="section" style={{paddingTop:12}}>
-          {filtered.length===0?<div className="empty-state"><div className="icon">📭</div><h3>Sem lançamentos</h3></div>:<>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
-              <span style={{fontSize:12,color:'var(--gray-500)'}}>{filtered.length} lançamentos</span>
-              <span style={{fontSize:13,fontWeight:700,color:total>=0?'var(--green)':'var(--red)'}}>{total>=0?'+':''}{fmt(total)}</span>
-            </div>
-            <div className="txn-list">{filtered.map(t=>(
-              <div className="txn-item" key={t.id}>
-                <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
-                <div className="txn-info" onClick={()=>setEditTxn({...t})} style={{cursor:'pointer'}}>
-                  <div className="txn-desc">{t.description}</div>
-                  <div className="txn-meta"><span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span> {t.category} · {t.member||'—'} · {t.date?.slice(5).replace('-','/')}</div>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
-                  <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
-                  <div style={{display:'flex',gap:4}}>
-                    <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>setEditTxn({...t})}>✏️</button>
-                    <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
+          {filtered.length===0
+            ?<div className="empty-state"><div className="icon">📭</div><h3>Sem lançamentos</h3></div>
+            :<>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+                <span style={{fontSize:12,color:'var(--gray-500)'}}>{filtered.length} lançamentos</span>
+                <span style={{fontSize:13,fontWeight:700,color:total>=0?'var(--green)':'var(--red)'}}>{total>=0?'+':''}{fmt(total)}</span>
+              </div>
+              <div className="txn-list">{filtered.map(t=>(
+                <div className="txn-item" key={t.id}>
+                  <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+                  <div className="txn-info" onClick={()=>setEditTxn({...t})} style={{cursor:'pointer'}}>
+                    <div className="txn-desc">{t.description}</div>
+                    <div className="txn-meta"><span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span> {t.category} · {t.member||'—'} · {t.date?.slice(5).replace('-','/')}</div>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+                    <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+                    <div style={{display:'flex',gap:4}}>
+                      <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>setEditTxn({...t})}>✏️</button>
+                      <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}</div>
-          </>}
+              ))}</div>
+            </>
+          }
         </div>
       )}
       {editTxn&&(
@@ -239,7 +280,13 @@ function NovoLancamento({ mes, toast, onSaved }) {
       <div className="form-card">
         <div className="form-group">
           <div className="form-label">Tipo</div>
-          <div className="type-chips">{TIPOS.map(t=><button key={t} className={`type-chip ${tipo===t?`selected-${t}`:''}`} onClick={()=>{setTipo(t);setCategory('')}}>{TIPO_ICONS[t]} {TIPO_LABELS[t]}</button>)}</div>
+          <div className="type-chips">
+            {TIPOS.map(t=>(
+              <button key={t} className={`type-chip ${tipo===t?`selected-${t}`:''}`} onClick={()=>{setTipo(t);setCategory('')}}>
+                {TIPO_ICONS[t]} {TIPO_LABELS[t]}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="form-row">
           <div className="form-group"><label className="form-label">Data</label><input type="date" className="form-input" value={date} onChange={e=>setDate(e.target.value)}/></div>
@@ -250,10 +297,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
           <input type="text" className="form-input" placeholder="Ex: Lopes Supermercados" value={desc} onChange={e=>setDesc(e.target.value)}/>
         </div>
         <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Valor (R$)</label>
-            <input type="number" className="form-input" placeholder="0,00" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}/>
-          </div>
+          <div className="form-group"><label className="form-label">Valor (R$)</label><input type="number" className="form-input" placeholder="0,00" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}/></div>
           <div className="form-group">
             <label className="form-label">Categoria</label>
             <select className="form-select" value={category} onChange={e=>setCategory(e.target.value)}>
@@ -308,7 +352,6 @@ function ImportarJSON({ mes, toast }) {
       setParsed(valid); const sel={}; valid.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
-
   const importar=async()=>{
     const toImport=parsed.filter((_,i)=>selected[i])
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
@@ -320,7 +363,6 @@ function ImportarJSON({ mes, toast }) {
     toast(`${rows.length} lançamentos importados!`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
-
   const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
 
   return (
@@ -378,13 +420,21 @@ function Orcamentos({ mes, setMes }) {
 
   const load=useCallback(async()=>{
     setLoading(true)
-    const [{data:t},{data:b}]=await Promise.all([supabase.from('transactions').select('category,amount,type').eq('month_ref',mes),supabase.from('budgets').select('*')])
+    const [{data:t},{data:b}]=await Promise.all([
+      supabase.from('transactions').select('category,amount,type').eq('month_ref',mes),
+      supabase.from('budgets').select('*')
+    ])
     setTxns(t||[]); setBudgets(b||[]); setLoading(false)
   },[mes])
   useEffect(()=>{ load() },[load])
 
   const spent={};txns.filter(t=>t.type!=='receita').forEach(t=>{spent[t.category]=(spent[t.category]||0)+Number(t.amount)})
-  const saveBudget=async(cat,val)=>{ const ex=budgets.find(b=>b.category===cat); if(ex) await supabase.from('budgets').update({amount:val}).eq('category',cat); else await supabase.from('budgets').insert({category:cat,amount:val}); setEditing(null); load() }
+  const saveBudget=async(cat,val)=>{
+    const ex=budgets.find(b=>b.category===cat)
+    if(ex) await supabase.from('budgets').update({amount:val}).eq('category',cat)
+    else await supabase.from('budgets').insert({category:cat,amount:val})
+    setEditing(null); load()
+  }
   const despCats=categories.filter(c=>c.type==='despesa').map(c=>c.name)
 
   return (
@@ -415,7 +465,10 @@ function Orcamentos({ mes, setMes }) {
                     </div>
                   }
                 </div>
-                {bud>0&&<><div className="budget-bar-bg"><div className="budget-bar-fill" style={{width:`${Math.min(pct*100,100)}%`,background:color}}/></div>{sp>bud&&<div style={{fontSize:11,color:'var(--red)',marginTop:4}}>Excedido em {fmt(sp-bud)}</div>}</>}
+                {bud>0&&<>
+                  <div className="budget-bar-bg"><div className="budget-bar-fill" style={{width:`${Math.min(pct*100,100)}%`,background:color}}/></div>
+                  {sp>bud&&<div style={{fontSize:11,color:'var(--red)',marginTop:4}}>Excedido em {fmt(sp-bud)}</div>}
+                </>}
               </div>
             )
           })}
@@ -446,7 +499,12 @@ function Relatorios() {
     load()
   },[ano])
 
-  const search=async()=>{ if(!busca.trim())return; setSearching(true); const {data}=await supabase.from('transactions').select('*').ilike('description',`%${busca}%`).order('date',{ascending:false}).limit(50); setResults(data||[]); setSearching(false) }
+  const search=async()=>{
+    if(!busca.trim())return
+    setSearching(true)
+    const {data}=await supabase.from('transactions').select('*').ilike('description',`%${busca}%`).order('date',{ascending:false}).limit(50)
+    setResults(data||[]); setSearching(false)
+  }
   const maxVal=Math.max(...data.map(d=>Math.max(d.receitas,d.despesas)),1)
 
   return (
@@ -520,7 +578,11 @@ function Recorrentes({ mes, toast }) {
   const [rCard,setRCard]=useState('N/A')
   const [rAmount,setRAmount]=useState('')
 
-  const load=useCallback(async()=>{ setLoading(true); const {data}=await supabase.from('recurring').select('*').order('description'); setRecurrings(data||[]); setLoading(false) },[])
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const {data}=await supabase.from('recurring').select('*').order('description')
+    setRecurrings(data||[]); setLoading(false)
+  },[])
   useEffect(()=>{ load() },[load])
 
   const addRecurring=async()=>{
@@ -529,9 +591,15 @@ function Recorrentes({ mes, toast }) {
     toast('Recorrente cadastrado!','success')
     setRDesc(''); setRAmount(''); setRCat(''); setRMember(''); setShowForm(false); load()
   }
-
-  const lancarMes=async(rec)=>{ const {error}=await supabase.from('transactions').insert({date:`${mes}-01`,description:rec.description,type:rec.type,category:rec.category,member:rec.member||'',card:rec.card||'N/A',installments:1,amount:rec.amount,notes:'Recorrente automático',month_ref:mes}); if(error)toast('Erro: '+error.message,'error'); else toast(`"${rec.description}" lançado!`,'success') }
-  const lancarTodos=async()=>{ const ativos=recurrings.filter(r=>r.active); for(const r of ativos)await lancarMes(r); toast(`${ativos.length} lançamentos criados!`,'success') }
+  const lancarMes=async(rec)=>{
+    const {error}=await supabase.from('transactions').insert({date:`${mes}-01`,description:rec.description,type:rec.type,category:rec.category,member:rec.member||'',card:rec.card||'N/A',installments:1,amount:rec.amount,notes:'Recorrente automático',month_ref:mes})
+    if(error)toast('Erro: '+error.message,'error'); else toast(`"${rec.description}" lançado!`,'success')
+  }
+  const lancarTodos=async()=>{
+    const ativos=recurrings.filter(r=>r.active)
+    for(const r of ativos) await lancarMes(r)
+    toast(`${ativos.length} lançamentos criados!`,'success')
+  }
   const toggleActive=async(id,active)=>{ await supabase.from('recurring').update({active:!active}).eq('id',id); load() }
   const del=async id=>{ if(!window.confirm('Remover?'))return; await supabase.from('recurring').delete().eq('id',id); load() }
   const cats=categories.filter(c=>rType==='receita'?c.type==='receita':c.type==='despesa')
@@ -560,20 +628,22 @@ function Recorrentes({ mes, toast }) {
       )}
       {loading?<div className="loading"><div className="spinner"/></div>:(
         <div className="section">
-          {recurrings.length===0?<div className="empty-state"><div className="icon">🔁</div><h3>Nenhum recorrente</h3><p>Cadastre salários, contas fixas e assinaturas.</p></div>
-          :<div className="txn-list">{recurrings.map(r=>(
-            <div className="txn-item" key={r.id} style={{opacity:r.active?1:.5}}>
-              <div className="txn-icon" style={{background:TIPO_BG[r.type]}}>{TIPO_ICONS[r.type]}</div>
-              <div className="txn-info"><div className="txn-desc">{r.description}</div><div className="txn-meta">{r.category} · {fmt(r.amount)} · {r.active?'Ativo':'Inativo'}</div></div>
-              <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end'}}>
-                <button style={{padding:'4px 10px',fontSize:11,background:'var(--green-light)',color:'var(--green)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>lancarMes(r)}>Lançar</button>
-                <div style={{display:'flex',gap:4}}>
-                  <button className="btn-secondary" style={{padding:'3px 8px',fontSize:10}} onClick={()=>toggleActive(r.id,r.active)}>{r.active?'Pausar':'Ativar'}</button>
-                  <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(r.id)}>✕</button>
+          {recurrings.length===0
+            ?<div className="empty-state"><div className="icon">🔁</div><h3>Nenhum recorrente</h3><p>Cadastre salários, contas fixas e assinaturas.</p></div>
+            :<div className="txn-list">{recurrings.map(r=>(
+              <div className="txn-item" key={r.id} style={{opacity:r.active?1:.5}}>
+                <div className="txn-icon" style={{background:TIPO_BG[r.type]}}>{TIPO_ICONS[r.type]}</div>
+                <div className="txn-info"><div className="txn-desc">{r.description}</div><div className="txn-meta">{r.category} · {fmt(r.amount)} · {r.active?'Ativo':'Inativo'}</div></div>
+                <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end'}}>
+                  <button style={{padding:'4px 10px',fontSize:11,background:'var(--green-light)',color:'var(--green)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>lancarMes(r)}>Lançar</button>
+                  <div style={{display:'flex',gap:4}}>
+                    <button className="btn-secondary" style={{padding:'3px 8px',fontSize:10}} onClick={()=>toggleActive(r.id,r.active)}>{r.active?'Pausar':'Ativar'}</button>
+                    <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(r.id)}>✕</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}</div>}
+            ))}</div>
+          }
         </div>
       )}
     </div>
@@ -588,46 +658,89 @@ function Configuracoes({ toast }) {
   const [newCard,setNewCard]=useState('')
   const [newMbr,setNewMbr]=useState('')
 
-  const addCat=async()=>{ if(!newCatName.trim())return; const {error}=await supabase.from('categories').insert({name:newCatName.trim(),type:newCatType}); if(error)toast('Já existe','error'); else{toast('Adicionado!','success');setNewCatName('');reloadGlobal()} }
+  const addCat=async()=>{
+    if(!newCatName.trim())return
+    const {error}=await supabase.from('categories').insert({name:newCatName.trim(),type:newCatType})
+    if(error)toast('Já existe','error')
+    else{toast('Adicionado!','success');setNewCatName('');reloadGlobal()}
+  }
   const delCat=async id=>{ await supabase.from('categories').delete().eq('id',id); reloadGlobal() }
-  const addCard=async()=>{ if(!newCard.trim())return; await supabase.from('cards').insert({name:newCard.trim()}); toast('Cartão adicionado!','success'); setNewCard(''); reloadGlobal() }
+  const addCard=async()=>{
+    if(!newCard.trim())return
+    await supabase.from('cards').insert({name:newCard.trim()})
+    toast('Cartão adicionado!','success'); setNewCard(''); reloadGlobal()
+  }
   const delCard=async id=>{ await supabase.from('cards').delete().eq('id',id); reloadGlobal() }
-  const addMbr=async()=>{ if(!newMbr.trim())return; await supabase.from('members').insert({name:newMbr.trim()}); toast('Membro adicionado!','success'); setNewMbr(''); reloadGlobal() }
+  const addMbr=async()=>{
+    if(!newMbr.trim())return
+    await supabase.from('members').insert({name:newMbr.trim()})
+    toast('Membro adicionado!','success'); setNewMbr(''); reloadGlobal()
+  }
   const delMbr=async id=>{ await supabase.from('members').delete().eq('id',id); reloadGlobal() }
-
-  const Sec=({title,children})=><div className="form-card" style={{marginBottom:12}}><div style={{fontFamily:'var(--font-display)',fontSize:17,marginBottom:14,fontWeight:400}}>{title}</div>{children}</div>
-  const Row=({name,onDel})=><div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}><span style={{flex:1,fontSize:14}}>{name}</span><button className="btn-danger" style={{padding:'3px 10px',fontSize:12}} onClick={onDel}>Remover</button></div>
 
   return (
     <div>
       <div className="page-header"><h1>Configurações</h1></div>
       <div style={{padding:'16px 0'}}>
-        <Sec title="👨‍👩‍👧 Membros da família">
-          {members.map(m=><Row key={m.id} name={m.name} onDel={()=>delMbr(m.id)}/>)}
+
+        <ConfigSection title="👨‍👩‍👧 Membros da família">
+          {members.map(m=><ConfigRow key={m.id} name={m.name} onDel={()=>delMbr(m.id)}/>)}
           <div style={{display:'flex',gap:8,marginTop:12}}>
-            <input className="form-input" style={{flex:1,margin:0}} placeholder="Nome do membro" value={newMbr} onChange={e=>setNewMbr(e.target.value)}/>
+            <input
+              className="form-input"
+              style={{flex:1,margin:0}}
+              placeholder="Nome do membro"
+              value={newMbr}
+              onChange={e=>setNewMbr(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&addMbr()}
+            />
             <button className="btn-secondary" onClick={addMbr}>+ Adicionar</button>
           </div>
-        </Sec>
-        <Sec title="🏷️ Categorias">
+        </ConfigSection>
+
+        <ConfigSection title="🏷️ Categorias">
           <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.05em'}}>Despesas</div>
-          {categories.filter(c=>c.type==='despesa').map(c=><Row key={c.id} name={c.name} onDel={()=>delCat(c.id)}/>)}
+          {categories.filter(c=>c.type==='despesa').map(c=><ConfigRow key={c.id} name={c.name} onDel={()=>delCat(c.id)}/>)}
           <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',margin:'12px 0 6px',textTransform:'uppercase',letterSpacing:'.05em'}}>Receitas</div>
-          {categories.filter(c=>c.type==='receita').map(c=><Row key={c.id} name={c.name} onDel={()=>delCat(c.id)}/>)}
+          {categories.filter(c=>c.type==='receita').map(c=><ConfigRow key={c.id} name={c.name} onDel={()=>delCat(c.id)}/>)}
           <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
-            <input className="form-input" style={{flex:2,margin:0,minWidth:120}} placeholder="Nova categoria" value={newCatName} onChange={e=>setNewCatName(e.target.value)}/>
-            <select className="form-select" style={{flex:1,margin:0,minWidth:100}} value={newCatType} onChange={e=>setNewCatType(e.target.value)}><option value="despesa">Despesa</option><option value="receita">Receita</option></select>
+            <input
+              className="form-input"
+              style={{flex:2,margin:0,minWidth:120}}
+              placeholder="Nova categoria"
+              value={newCatName}
+              onChange={e=>setNewCatName(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&addCat()}
+            />
+            <select className="form-select" style={{flex:1,margin:0,minWidth:100}} value={newCatType} onChange={e=>setNewCatType(e.target.value)}>
+              <option value="despesa">Despesa</option>
+              <option value="receita">Receita</option>
+            </select>
             <button className="btn-secondary" onClick={addCat}>+ Add</button>
           </div>
-        </Sec>
-        <Sec title="💳 Cartões">
-          {cards.map(c=><Row key={c.id} name={c.name} onDel={()=>delCard(c.id)}/>)}
+        </ConfigSection>
+
+        <ConfigSection title="💳 Cartões">
+          {cards.map(c=><ConfigRow key={c.id} name={c.name} onDel={()=>delCard(c.id)}/>)}
           <div style={{display:'flex',gap:8,marginTop:12}}>
-            <input className="form-input" style={{flex:1,margin:0}} placeholder="Ex: Nubank 1234" value={newCard} onChange={e=>setNewCard(e.target.value)}/>
+            <input
+              className="form-input"
+              style={{flex:1,margin:0}}
+              placeholder="Ex: Nubank 1234"
+              value={newCard}
+              onChange={e=>setNewCard(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&addCard()}
+            />
             <button className="btn-secondary" onClick={addCard}>+ Adicionar</button>
           </div>
-        </Sec>
-        <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:'var(--radius-md)',padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>
+        </ConfigSection>
+
+        <div style={{padding:'0 16px'}}>
+          <div style={{background:'var(--gray-100)',borderRadius:'var(--radius-md)',padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>
+            💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".
+          </div>
+        </div>
+
       </div>
     </div>
   )
@@ -668,7 +781,6 @@ export default function App() {
   const desktop=useDesktop()
   const toast=(msg,type='success')=>setToastData({msg,type})
 
-  // Dados globais carregados UMA VEZ aqui — não dentro de cada tela
   const [categories,setCategories]=useState([])
   const [cards,setCards]=useState([])
   const [members,setMembers]=useState([])
@@ -681,7 +793,6 @@ export default function App() {
     ])
     setCategories(cats||[]); setCards(cds||[]); setMembers(mbrs||[])
   },[])
-
   useEffect(()=>{ reloadGlobal() },[reloadGlobal])
 
   const mobileTabs=[
