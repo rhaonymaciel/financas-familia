@@ -799,6 +799,8 @@ function Parcelas({ mes, setMes }) {
     </div>
   )
 }
+
+
 // ── ORÇAMENTOS ────────────────────────────────────────────────────────────────
 function Orcamentos({ mes, setMes }) {
   const {categories}=useApp()
