@@ -482,8 +482,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
     </div>
   )
 }
-
-// ── IMPORTAR JSON — com detecção de parcelas e fechamento ────────────────────
+// ── IMPORTAR JSON ─────────────────────────────────────────────────────────────
 function ImportarJSON({ mes, toast }) {
   const {categories,cards}=useApp()
   const [json,setJson]=useState('')
@@ -494,40 +493,47 @@ function ImportarJSON({ mes, toast }) {
   const [useAutoMonth,setUseAutoMonth]=useState(true)
   const [manualMonth,setManualMonth]=useState(mes)
   const catNames=categories.filter(c=>c.type==='despesa').map(c=>c.name)
-
   const cardInfo=cards.find(c=>c.name===selectedCardName)
 
   const processar=()=>{
     try{
-      const obj=JSON.parse(json); const arr=obj.transactions||obj
+      const obj=JSON.parse(json)
+      const arr=obj.transactions||obj
       if(!Array.isArray(arr)||!arr.length) throw new Error('Nenhuma transação encontrada')
       const valid=arr.filter(t=>t.amount>0&&t.description)
       if(!valid.length) throw new Error('Nenhum lançamento válido')
 
-      // Detectar parcelas e calcular mês ref
       const enriched=valid.map(t=>{
         const installInfo=parseInstallment(t.description)
-        const autoMes=cardInfo?.closing_day
+        // Calcular mês base da parcela ATUAL
+        const baseMonth=useAutoMonth&&cardInfo?.closing_day
           ? calcMonthRef(t.date, cardInfo.closing_day, null)
-          : (t.date?.slice(0,7)||mes)
+          : manualMonth
 
-        // Ajustar mês baseado na parcela atual
-        let targetMes=useAutoMonth?autoMes:manualMonth
-        if(installInfo){
-          // Já é a parcela atual — o mês base é calculado como se fosse a parcela 1
-          // targetMes permanece como calculado
+        // Se for parcela 02/12 ou superior, o mês base é calculado retroativamente
+        // para que a parcela 01 coincida com a data de compra
+        let targetMes=baseMonth
+        if(installInfo&&installInfo.current>1){
+          // Voltar ao mês da parcela 1 e avançar até a parcela atual
+          const [y,m]=baseMonth.split('-').map(Number)
+          const originMonth=new Date(y,m-1-(installInfo.current-1),1)
+          const currentParcelMonth=new Date(originMonth.getFullYear(),originMonth.getMonth()+(installInfo.current-1),1)
+          targetMes=currentParcelMonth.toISOString().slice(0,7)
         }
 
         return {
           ...t,
           installInfo,
           targetMes,
-          isInstallment: !!installInfo
+          baseMonth,
+          isInstallment:!!installInfo
         }
       })
 
       setParsed(enriched)
-      const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
+      const sel={}
+      enriched.forEach((_,i)=>sel[i]=true)
+      setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
 
@@ -536,29 +542,35 @@ function ImportarJSON({ mes, toast }) {
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
     setLoading(true)
 
-    const txnRows=toImport.map(t=>({
-      date:t.date,
-      description:t.description,
-      type:'cartao',
-      category:t.category||'Outros',
-      member:t.member||'',
-      card:selectedCardName,
-      installments:t.installInfo?t.installInfo.total:1,
-      amount:t.amount,
-      notes:t.notes||'',
-      month_ref:t.targetMes
-    }))
+    let totalImported=0
+    let totalParcelas=0
 
-    const {data:inserted,error}=await supabase.from('transactions').insert(txnRows).select()
-    if(error){toast('Erro: '+error.message,'error');setLoading(false);return}
+    for(const t of toImport){
+      // 1. Inserir a parcela ATUAL
+      const {data:inserted,error}=await supabase.from('transactions').insert({
+        date:t.date,
+        description:t.description,
+        type:'cartao',
+        category:t.category||'Outros',
+        member:t.member||'',
+        card:selectedCardName,
+        installments:t.installInfo?t.installInfo.total:1,
+        amount:t.amount,
+        notes:t.notes||'',
+        month_ref:t.targetMes
+      }).select().single()
 
-    // Registrar parcelas na tabela installments
-    const installRows=[]
-    toImport.forEach((t,i)=>{
-      if(t.installInfo&&inserted[i]){
+      if(error){ console.error(error); continue }
+      totalImported++
+
+      if(t.installInfo){
+        const groupId=crypto.randomUUID()
+        const installRows=[]
+
+        // Registrar parcela atual na tabela installments
         installRows.push({
-          group_id:crypto.randomUUID(),
-          description:t.description.replace(/\s*\d{1,2}\/\d{1,2}\s*$/,'').trim(),
+          group_id:groupId,
+          description:t.description.replace(/\s*\d{1,2}\/\d{1,2}$/,'').trim(),
           total_amount:t.amount*t.installInfo.total,
           installment_amount:t.amount,
           total_installments:t.installInfo.total,
@@ -567,21 +579,72 @@ function ImportarJSON({ mes, toast }) {
           category:t.category||'Outros',
           member:t.member||'',
           month_ref:t.targetMes,
-          transaction_id:inserted[i].id
+          transaction_id:inserted.id
         })
+
+        // 2. Criar parcelas FUTURAS automaticamente
+        const remainingCount=t.installInfo.total-t.installInfo.current
+        if(remainingCount>0){
+          const [y,m]=t.targetMes.split('-').map(Number)
+          const futureInserts=[]
+
+          for(let i=1;i<=remainingCount;i++){
+            const futMes=new Date(y,m-1+i,1).toISOString().slice(0,7)
+            const parcelNum=t.installInfo.current+i
+            const descBase=t.description.replace(/\s*\d{1,2}\/\d{1,2}$/,'').trim()
+            const futDesc=`${descBase} ${parcelNum}/${t.installInfo.total}`
+
+            futureInserts.push({
+              date:t.date,
+              description:futDesc,
+              type:'cartao',
+              category:t.category||'Outros',
+              member:t.member||'',
+              card:selectedCardName,
+              installments:t.installInfo.total,
+              amount:t.amount, // mesmo valor — será atualizado quando a fatura futura chegar
+              notes:'Parcela futura (valor estimado)',
+              month_ref:futMes
+            })
+          }
+
+          const {data:futInserted,error:futError}=await supabase
+            .from('transactions').insert(futureInserts).select()
+
+          if(!futError&&futInserted){
+            totalParcelas+=futInserted.length
+            futInserted.forEach((fi,idx)=>{
+              const parcelNum=t.installInfo.current+idx+1
+              const futMes=new Date(y,m-1+idx+1,1).toISOString().slice(0,7)
+              installRows.push({
+                group_id:groupId,
+                description:t.description.replace(/\s*\d{1,2}\/\d{1,2}$/,'').trim(),
+                total_amount:t.amount*t.installInfo.total,
+                installment_amount:t.amount,
+                total_installments:t.installInfo.total,
+                current_installment:parcelNum,
+                card:selectedCardName,
+                category:t.category||'Outros',
+                member:t.member||'',
+                month_ref:futMes,
+                transaction_id:fi.id
+              })
+            })
+          }
+        }
+
+        await supabase.from('installments').insert(installRows)
       }
-    })
-    if(installRows.length>0){
-      await supabase.from('installments').insert(installRows)
     }
 
     setLoading(false)
-    toast(`${toImport.length} lançamentos importados! (${installRows.length} parcelados detectados)`,'success')
+    toast(`${totalImported} lançamentos importados! ${totalParcelas>0?`+ ${totalParcelas} parcelas futuras criadas automaticamente`:''}`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
 
   const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
-  const nParcelados=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i].isInstallment).length:0
+  const nParcelados=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.isInstallment).length:0
+  const nFuturas=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.installInfo).reduce((s,t)=>s+(t.installInfo.total-t.installInfo.current),0):0
 
   return (
     <div>
@@ -590,7 +653,6 @@ function ImportarJSON({ mes, toast }) {
         <div style={{background:'var(--blue-light)',borderRadius:8,padding:'12px 14px',marginBottom:16,fontSize:13,color:'var(--blue)',lineHeight:1.5}}>
           💡 Envie o PDF da fatura no chat → Claude extrai → copie o JSON e cole abaixo.
         </div>
-
         <div className="form-row">
           <div className="form-group">
             <label className="form-label">Cartão da fatura</label>
@@ -600,22 +662,20 @@ function ImportarJSON({ mes, toast }) {
           </div>
           <div className="form-group">
             <label className="form-label">Mês de referência</label>
-            <div style={{display:'flex',gap:6,alignItems:'center'}}>
-              <label style={{fontSize:12,display:'flex',alignItems:'center',gap:4,whiteSpace:'nowrap',cursor:'pointer'}}>
+            <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+              <label style={{fontSize:13,display:'flex',alignItems:'center',gap:4,cursor:'pointer',whiteSpace:'nowrap'}}>
                 <input type="checkbox" checked={useAutoMonth} onChange={e=>setUseAutoMonth(e.target.checked)}/>
-                Auto
+                Auto (pelo fechamento)
               </label>
               {!useAutoMonth&&<input type="month" className="form-input" style={{margin:0}} value={manualMonth} onChange={e=>setManualMonth(e.target.value)}/>}
             </div>
           </div>
         </div>
-
         {cardInfo?.closing_day&&(
           <div style={{background:'var(--green-pale)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--green)',marginBottom:12}}>
-            📅 Fechamento dia <strong>{cardInfo.closing_day}</strong> · Vencimento dia <strong>{cardInfo.due_day}</strong> · O mês será calculado automaticamente por data de compra
+            📅 Fechamento dia <strong>{cardInfo.closing_day}</strong> · Vencimento dia <strong>{cardInfo.due_day}</strong> · Compras após dia {cardInfo.closing_day} entram na fatura do mês seguinte
           </div>
         )}
-
         <div className="form-group">
           <label className="form-label">JSON da fatura</label>
           <textarea className="json-textarea" value={json} onChange={e=>setJson(e.target.value)} placeholder='{"transactions":[...]}' rows={5}/>
@@ -631,7 +691,7 @@ function ImportarJSON({ mes, toast }) {
           </div>
           {nParcelados>0&&(
             <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:10}}>
-              💳 {nParcelados} lançamento(s) parcelado(s) detectado(s) — serão registrados no painel de parcelas futuras.
+              💳 <strong>{nParcelados}</strong> parcelado(s) detectado(s) → <strong>{nFuturas}</strong> parcelas futuras serão criadas automaticamente com valor estimado. Quando a fatura futura chegar, importe novamente para atualizar os valores reais.
             </div>
           )}
           <label style={{fontSize:13,display:'flex',alignItems:'center',gap:6,cursor:'pointer',marginBottom:10}}>
@@ -646,7 +706,7 @@ function ImportarJSON({ mes, toast }) {
                   <td><input type="checkbox" checked={!!selected[i]} onChange={e=>setSelected(s=>({...s,[i]:e.target.checked}))}/></td>
                   <td style={{maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                     {t.description}
-                    {t.isInstallment&&<span style={{marginLeft:4,fontSize:10,background:'var(--purple-light)',color:'var(--purple)',padding:'1px 5px',borderRadius:10}}>{t.installInfo.current}/{t.installInfo.total}x</span>}
+                    {t.isInstallment&&<span style={{marginLeft:4,fontSize:10,background:'var(--purple-light)',color:'var(--purple)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>{t.installInfo.current}/{t.installInfo.total}x</span>}
                   </td>
                   <td><select className="select-native" value={t.category||'Outros'} onChange={e=>{const p=[...parsed];p[i]={...p[i],category:e.target.value};setParsed(p)}}>{catNames.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
                   <td style={{fontSize:11,color:'var(--gray-500)',whiteSpace:'nowrap'}}>{t.targetMes}</td>
@@ -656,105 +716,9 @@ function ImportarJSON({ mes, toast }) {
             </table>
           </div>
           <button className="btn-primary" onClick={importar} disabled={loading}>
-            {loading?'Importando...':`✓ Importar ${parsed.filter((_,i)=>selected[i]).length} lançamentos`}
+            {loading?'Importando...':`✓ Importar ${parsed.filter((_,i)=>selected[i]).length} lançamentos${nFuturas>0?` + ${nFuturas} parcelas futuras`:''}`}
           </button>
         </div>
-      )}
-    </div>
-  )
-}
-
-// ── PARCELAS ──────────────────────────────────────────────────────────────────
-function Parcelas({ mes, setMes }) {
-  const [parcelas,setParcelas]=useState([])
-  const [loading,setLoading]=useState(true)
-
-  const load=useCallback(async()=>{
-    setLoading(true)
-    // Carregar parcelas dos próximos 12 meses a partir do mês atual
-    const meses=[]
-    const [y,m]=mes.split('-').map(Number)
-    for(let i=0;i<12;i++){
-      const d=new Date(y,m-1+i,1)
-      meses.push(d.toISOString().slice(0,7))
-    }
-    const {data}=await supabase.from('installments').select('*').in('month_ref',meses).order('month_ref').order('description')
-    setParcelas(data||[]); setLoading(false)
-  },[mes])
-  useEffect(()=>{ load() },[load])
-
-  // Agrupar por mês
-  const byMes={}
-  parcelas.forEach(p=>{
-    if(!byMes[p.month_ref]) byMes[p.month_ref]=[]
-    byMes[p.month_ref].push(p)
-  })
-
-  // Agrupar por group_id para ver o total de cada compra
-  const groups={}
-  parcelas.forEach(p=>{
-    if(!groups[p.group_id]) groups[p.group_id]={desc:p.description,total:p.total_amount,installAmt:p.installment_amount,totalInst:p.total_installments,cat:p.category,card:p.card,meses:[]}
-    groups[p.group_id].meses.push(p.month_ref)
-  })
-
-  return (
-    <div>
-      <div className="page-header"><h1>Parcelas</h1><div className="subtitle">Compromissos futuros dos cartões</div></div>
-      <MonthNav mes={mes} setMes={setMes}/>
-      {loading?<div className="loading"><div className="spinner"/></div>:(
-        parcelas.length===0
-          ?<div className="empty-state"><div className="icon">✅</div><h3>Nenhuma parcela futura</h3><p>Suas compras parceladas aparecerão aqui.</p></div>
-          :<div>
-            {/* Resumo geral */}
-            <div className="section" style={{paddingTop:16}}>
-              <div className="section-title">Resumo de compromissos</div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
-                {[1,2,3,4,5,6].map(offset=>{
-                  const [y,m]=mes.split('-').map(Number)
-                  const futMes=new Date(y,m-1+offset,1).toISOString().slice(0,7)
-                  const items=byMes[futMes]||[]
-                  if(!items.length) return null
-                  const total=items.reduce((s,p)=>s+Number(p.installment_amount),0)
-                  return(
-                    <div key={futMes} style={{background:'var(--white)',borderRadius:12,padding:'12px 14px',boxShadow:'var(--shadow-sm)',border:'1px solid rgba(15,26,18,.05)'}}>
-                      <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:4}}>{fmtM(futMes)}</div>
-                      <div style={{fontSize:18,fontWeight:500,color:'var(--amber)',fontFamily:'var(--font-display)'}}>{fmt(total)}</div>
-                      <div style={{fontSize:11,color:'var(--gray-500)',marginTop:2}}>{items.length} parcela(s)</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Detalhe por mês */}
-            <div className="section">
-              <div className="section-title">Detalhe por mês</div>
-              {Object.entries(byMes).sort(([a],[b])=>a.localeCompare(b)).map(([mesRef,items])=>{
-                const total=items.reduce((s,p)=>s+Number(p.installment_amount),0)
-                return(
-                  <div key={mesRef} style={{marginBottom:16}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,padding:'8px 0',borderBottom:'2px solid var(--gray-100)'}}>
-                      <span style={{fontFamily:'var(--font-display)',fontSize:15,fontWeight:400}}>{fmtM(mesRef)}</span>
-                      <span style={{fontSize:14,fontWeight:700,color:'var(--amber)'}}>{fmt(total)}</span>
-                    </div>
-                    {items.map(p=>(
-                      <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}>
-                        <div style={{width:32,height:32,borderRadius:8,background:'var(--purple-light)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>💳</div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:14,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.description}</div>
-                          <div style={{fontSize:11,color:'var(--gray-500)'}}>{p.category} · {p.card} · <span style={{color:'var(--purple)',fontWeight:600}}>{p.current_installment}/{p.total_installments}x</span></div>
-                        </div>
-                        <div style={{textAlign:'right',flexShrink:0}}>
-                          <div style={{fontSize:14,fontWeight:600}}>{fmt(p.installment_amount)}</div>
-                          <div style={{fontSize:10,color:'var(--gray-500)'}}>de {fmt(p.total_amount)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
       )}
     </div>
   )
