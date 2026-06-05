@@ -1164,17 +1164,16 @@ export default function App() {
   const [mes,setMes]=useState(todayYM)
   const [toastData,setToastData]=useState(null)
   const [showMais,setShowMais]=useState(false)
-  const desktop=useDesktop()
   const [authed,setAuthed]=useState(!!localStorage.getItem('fm_auth'))
-  const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
-  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
-  const toast=(msg,type='success')=>setToastData({msg,type})
-
   const [categories,setCategories]=useState([])
   const [cards,setCards]=useState([])
   const [members,setMembers]=useState([])
+  const desktop=useDesktop()
+  const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
+  const toast=(msg,type='success')=>setToastData({msg,type})
+  if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
-  const reloadGlobal=useCallback(async()=>{
+   const reloadGlobal=useCallback(async()=>{
     const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
       supabase.from('categories').select('*').order('name'),
       supabase.from('cards').select('*').order('name'),
