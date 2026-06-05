@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, createContext, useContext } from 'react'
 import { supabase } from './supabase'
 import './index.css'
 
@@ -14,6 +14,10 @@ const fmtM = ym => { const [y,m]=ym.split('-'); return new Date(y,m-1,1).toLocal
 const todayYM   = () => new Date().toISOString().slice(0,7)
 const todayDate = () => new Date().toISOString().slice(0,10)
 const useDesktop = () => { const [d,setD]=useState(window.innerWidth>=768); useEffect(()=>{ const h=()=>setD(window.innerWidth>=768); window.addEventListener('resize',h); return()=>window.removeEventListener('resize',h) },[]); return d }
+
+// Context global — evita re-render nos campos ao digitar
+const AppCtx = createContext({})
+const useApp = () => useContext(AppCtx)
 
 function Toast({ msg, type, onHide }) {
   useEffect(()=>{ const t=setTimeout(onHide,2800); return()=>clearTimeout(t) },[onHide])
@@ -46,22 +50,6 @@ function Modal({ title, onClose, children }) {
   )
 }
 
-function useAppData() {
-  const [categories,setCategories]=useState([])
-  const [cards,setCards]=useState([])
-  const [members,setMembers]=useState([])
-  const loadGlobal=useCallback(async()=>{
-    const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
-      supabase.from('categories').select('*').order('name'),
-      supabase.from('cards').select('*').order('name'),
-      supabase.from('members').select('*').order('name'),
-    ])
-    setCategories(cats||[]); setCards(cds||[]); setMembers(mbrs||[])
-  },[])
-  useEffect(()=>{ loadGlobal() },[loadGlobal])
-  return {categories,cards,members,loadGlobal}
-}
-
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({ mes, setMes }) {
   const [txns,setTxns]=useState([])
@@ -88,7 +76,7 @@ function Dashboard({ mes, setMes }) {
     <div>
       <div className="page-header"><h1>Finanças Maciel</h1><div className="subtitle">Controle financeiro familiar</div></div>
       <MonthNav mes={mes} setMes={setMes}/>
-      {loading ? <div className="loading"><div className="spinner"/></div> : <>
+      {loading?<div className="loading"><div className="spinner"/></div>:<>
         <div className="metrics-grid">
           <div className="metric-card green"><div className="label">Receitas</div><div className="value">{fmt(receitas)}</div></div>
           <div className="metric-card red"><div className="label">Despesas</div><div className="value">{fmt(despesas)}</div></div>
@@ -99,7 +87,7 @@ function Dashboard({ mes, setMes }) {
           <div className="metric-card amber"><div className="label">Cartão</div><div className="value">{fmt(cartao)}</div><div className="sub">{txns.filter(t=>t.type==='cartao').length} lançamentos</div></div>
         </div>
         <div className={desktop?'desktop-grid':'section'} style={!desktop?{paddingTop:0}:{}}>
-          {catEntries.length>0 && (
+          {catEntries.length>0&&(
             <div><div className="section-title" style={desktop?{paddingTop:0}:{}}>Por categoria</div>
             <div className="chart-card">{catEntries.slice(0,8).map(([cat,val],i)=>(
               <div className="cat-bar-row" key={cat}>
@@ -109,7 +97,7 @@ function Dashboard({ mes, setMes }) {
               </div>
             ))}</div></div>
           )}
-          {Object.keys(byMember).length>0 && (
+          {Object.keys(byMember).length>0&&(
             <div><div className="section-title" style={desktop?{paddingTop:0}:{}}>Por membro</div>
             <div className="chart-card">{Object.entries(byMember).sort((a,b)=>b[1]-a[1]).map(([mbr,val],i)=>(
               <div className="cat-bar-row" key={mbr}>
@@ -121,8 +109,8 @@ function Dashboard({ mes, setMes }) {
           )}
         </div>
         <div className="section"><div className="section-title">Últimos lançamentos</div>
-          {txns.length===0 ? <div className="empty-state"><div className="icon">📭</div><h3>Nenhum lançamento</h3><p>Use "Lançar" para adicionar.</p></div>
-          : <div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>(
+          {txns.length===0?<div className="empty-state"><div className="icon">📭</div><h3>Nenhum lançamento</h3><p>Use "Lançar" para adicionar.</p></div>
+          :<div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>(
             <div className="txn-item" key={t.id}>
               <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
               <div className="txn-info"><div className="txn-desc">{t.description}</div><div className="txn-meta">{t.category} · {t.date?.slice(5).replace('-','/')}</div></div>
@@ -137,18 +125,30 @@ function Dashboard({ mes, setMes }) {
 
 // ── EXTRATO ───────────────────────────────────────────────────────────────────
 function Lancamentos({ mes, setMes, toast }) {
+  const {categories,members}=useApp()
   const [txns,setTxns]=useState([])
   const [loading,setLoading]=useState(true)
   const [filterTipo,setFilter]=useState('todos')
   const [editTxn,setEditTxn]=useState(null)
-  const {categories,members}=useAppData()
-  const load=useCallback(async()=>{ setLoading(true); const {data}=await supabase.from('transactions').select('*').eq('month_ref',mes).order('date',{ascending:false}); setTxns(data||[]); setLoading(false) },[mes])
+
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const {data}=await supabase.from('transactions').select('*').eq('month_ref',mes).order('date',{ascending:false})
+    setTxns(data||[]); setLoading(false)
+  },[mes])
   useEffect(()=>{ load() },[load])
-  const del=async id=>{ if(!window.confirm('Remover?')) return; await supabase.from('transactions').delete().eq('id',id); toast('Removido','success'); load() }
-  const saveEdit=async()=>{ const {id,...rest}=editTxn; await supabase.from('transactions').update({description:rest.description,amount:parseFloat(rest.amount),category:rest.category,member:rest.member,type:rest.type,date:rest.date,notes:rest.notes}).eq('id',id); toast('Atualizado!','success'); setEditTxn(null); load() }
+
+  const del=async id=>{ if(!window.confirm('Remover?'))return; await supabase.from('transactions').delete().eq('id',id); toast('Removido','success'); load() }
+  const saveEdit=async()=>{
+    const {id,...rest}=editTxn
+    await supabase.from('transactions').update({description:rest.description,amount:parseFloat(rest.amount),category:rest.category,member:rest.member,type:rest.type,date:rest.date,notes:rest.notes}).eq('id',id)
+    toast('Atualizado!','success'); setEditTxn(null); load()
+  }
+
   const filtered=filterTipo==='todos'?txns:txns.filter(t=>t.type===filterTipo)
   const total=filtered.reduce((s,t)=>t.type==='receita'?s+Number(t.amount):s-Number(t.amount),0)
   const catsByType=tipo=>categories.filter(c=>tipo==='receita'?c.type==='receita':c.type==='despesa').map(c=>c.name)
+
   return (
     <div>
       <div className="page-header"><h1>Extrato</h1></div>
@@ -208,43 +208,81 @@ function Lancamentos({ mes, setMes, toast }) {
 
 // ── NOVO LANÇAMENTO ──────────────────────────────────────────────────────────
 function NovoLancamento({ mes, toast, onSaved }) {
+  const {categories,cards,members}=useApp()
   const [tipo,setTipo]=useState('variavel')
   const [loading,setLoading]=useState(false)
   const [monthRef,setMonthRef]=useState(mes)
-  const [form,setForm]=useState({date:todayDate(),description:'',amount:'',category:'',member:'',card:'N/A',notes:''})
-  const {categories,cards,members}=useAppData()
+  const [desc,setDesc]=useState('')
+  const [amount,setAmount]=useState('')
+  const [category,setCategory]=useState('')
+  const [member,setMember]=useState('')
+  const [card,setCard]=useState('N/A')
+  const [notes,setNotes]=useState('')
+  const [date,setDate]=useState(todayDate())
+
   const cats=categories.filter(c=>tipo==='receita'?c.type==='receita':c.type==='despesa')
+
   const save=async()=>{
-    if(!form.description||!form.amount||!form.category){toast('Preencha descrição, valor e categoria','error');return}
+    if(!desc||!amount||!category){toast('Preencha descrição, valor e categoria','error');return}
     setLoading(true)
-    const {error}=await supabase.from('transactions').insert({date:form.date,description:form.description,type:tipo,category:form.category,member:form.member,card:form.card,installments:1,amount:parseFloat(form.amount),notes:form.notes,month_ref:monthRef})
+    const {error}=await supabase.from('transactions').insert({date,description:desc,type:tipo,category,member,card,installments:1,amount:parseFloat(amount),notes,month_ref:monthRef})
     setLoading(false)
     if(error){toast('Erro: '+error.message,'error');return}
     toast('Lançamento salvo!','success')
-    setForm({date:todayDate(),description:'',amount:'',category:'',member:'',card:'N/A',notes:''})
+    setDesc(''); setAmount(''); setCategory(''); setMember(''); setNotes('')
     onSaved()
   }
+
   return (
     <div>
       <div className="page-header"><h1>Novo lançamento</h1></div>
       <div className="form-card">
-        <div className="form-group"><div className="form-label">Tipo</div>
-          <div className="type-chips">{TIPOS.map(t=><button key={t} className={`type-chip ${tipo===t?`selected-${t}`:''}`} onClick={()=>{setTipo(t);setForm(f=>({...f,category:''}))}}>  {TIPO_ICONS[t]} {TIPO_LABELS[t]}</button>)}</div>
+        <div className="form-group">
+          <div className="form-label">Tipo</div>
+          <div className="type-chips">{TIPOS.map(t=><button key={t} className={`type-chip ${tipo===t?`selected-${t}`:''}`} onClick={()=>{setTipo(t);setCategory('')}}>{TIPO_ICONS[t]} {TIPO_LABELS[t]}</button>)}</div>
         </div>
         <div className="form-row">
-          <div className="form-group"><label className="form-label">Data</label><input type="date" className="form-input" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></div>
+          <div className="form-group"><label className="form-label">Data</label><input type="date" className="form-input" value={date} onChange={e=>setDate(e.target.value)}/></div>
           <div className="form-group"><label className="form-label">Mês ref.</label><input type="month" className="form-input" value={monthRef} onChange={e=>setMonthRef(e.target.value)}/></div>
         </div>
-        <div className="form-group"><label className="form-label">Descrição</label><input type="text" className="form-input" placeholder="Ex: Lopes Supermercados" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))}/></div>
-        <div className="form-row">
-          <div className="form-group"><label className="form-label">Valor (R$)</label><input type="number" className="form-input" placeholder="0,00" step="0.01" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))}/></div>
-          <div className="form-group"><label className="form-label">Categoria</label><select className="form-select" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}><option value="">Selecione</option>{cats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+        <div className="form-group">
+          <label className="form-label">Descrição</label>
+          <input type="text" className="form-input" placeholder="Ex: Lopes Supermercados" value={desc} onChange={e=>setDesc(e.target.value)}/>
         </div>
         <div className="form-row">
-          <div className="form-group"><label className="form-label">Membro</label><select className="form-select" value={form.member} onChange={e=>setForm(f=>({...f,member:e.target.value}))}><option value="">—</option>{members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}</select></div>
-          {tipo==='cartao'&&<div className="form-group"><label className="form-label">Cartão</label><select className="form-select" value={form.card} onChange={e=>setForm(f=>({...f,card:e.target.value}))}>{cards.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>}
+          <div className="form-group">
+            <label className="form-label">Valor (R$)</label>
+            <input type="number" className="form-input" placeholder="0,00" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Categoria</label>
+            <select className="form-select" value={category} onChange={e=>setCategory(e.target.value)}>
+              <option value="">Selecione</option>
+              {cats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          </div>
         </div>
-        <div className="form-group"><label className="form-label">Observação</label><input type="text" className="form-input" placeholder="Opcional" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></div>
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">Membro</label>
+            <select className="form-select" value={member} onChange={e=>setMember(e.target.value)}>
+              <option value="">—</option>
+              {members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}
+            </select>
+          </div>
+          {tipo==='cartao'&&(
+            <div className="form-group">
+              <label className="form-label">Cartão</label>
+              <select className="form-select" value={card} onChange={e=>setCard(e.target.value)}>
+                {cards.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="form-group">
+          <label className="form-label">Observação</label>
+          <input type="text" className="form-input" placeholder="Opcional" value={notes} onChange={e=>setNotes(e.target.value)}/>
+        </div>
         <button className="btn-primary" onClick={save} disabled={loading}>{loading?'Salvando...':'✓ Salvar lançamento'}</button>
       </div>
     </div>
@@ -253,13 +291,14 @@ function NovoLancamento({ mes, toast, onSaved }) {
 
 // ── IMPORTAR JSON ─────────────────────────────────────────────────────────────
 function ImportarJSON({ mes, toast }) {
+  const {categories}=useApp()
   const [json,setJson]=useState('')
   const [parsed,setParsed]=useState(null)
   const [selected,setSelected]=useState({})
   const [loading,setLoading]=useState(false)
   const [monthRef,setMonthRef]=useState(mes)
-  const {categories}=useAppData()
   const catNames=categories.filter(c=>c.type==='despesa').map(c=>c.name)
+
   const processar=()=>{
     try{
       const obj=JSON.parse(json); const arr=obj.transactions||obj
@@ -269,6 +308,7 @@ function ImportarJSON({ mes, toast }) {
       setParsed(valid); const sel={}; valid.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
+
   const importar=async()=>{
     const toImport=parsed.filter((_,i)=>selected[i])
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
@@ -280,16 +320,21 @@ function ImportarJSON({ mes, toast }) {
     toast(`${rows.length} lançamentos importados!`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
+
   const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
+
   return (
     <div>
       <div className="page-header"><h1>Importar fatura</h1><div className="subtitle">Cole o JSON extraído pelo Claude</div></div>
       <div className="form-card">
         <div style={{background:'var(--blue-light)',borderRadius:'var(--radius-md)',padding:'12px 14px',marginBottom:16,fontSize:13,color:'var(--blue)',lineHeight:1.5}}>
-          💡 Envie o PDF da fatura aqui no chat → Claude extrai → copie o JSON e cole abaixo.
+          💡 Envie o PDF da fatura no chat → Claude extrai → copie o JSON e cole abaixo.
         </div>
         <div className="form-group"><label className="form-label">Mês de referência</label><input type="month" className="form-input" value={monthRef} onChange={e=>setMonthRef(e.target.value)}/></div>
-        <div className="form-group"><label className="form-label">JSON da fatura</label><textarea className="json-textarea" value={json} onChange={e=>setJson(e.target.value)} placeholder='{"transactions":[...]}' rows={5}/></div>
+        <div className="form-group">
+          <label className="form-label">JSON da fatura</label>
+          <textarea className="json-textarea" value={json} onChange={e=>setJson(e.target.value)} placeholder='{"transactions":[...]}' rows={5}/>
+        </div>
         <button className="btn-primary" style={{marginBottom:0}} onClick={processar}>Visualizar lançamentos</button>
       </div>
       {parsed&&(
@@ -324,17 +369,24 @@ function ImportarJSON({ mes, toast }) {
 
 // ── ORÇAMENTOS ────────────────────────────────────────────────────────────────
 function Orcamentos({ mes, setMes }) {
+  const {categories}=useApp()
   const [txns,setTxns]=useState([])
   const [budgets,setBudgets]=useState([])
   const [loading,setLoading]=useState(true)
   const [editing,setEditing]=useState(null)
   const [editVal,setEditVal]=useState('')
-  const {categories}=useAppData()
-  const load=useCallback(async()=>{ setLoading(true); const [{data:t},{data:b}]=await Promise.all([supabase.from('transactions').select('category,amount,type').eq('month_ref',mes),supabase.from('budgets').select('*')]); setTxns(t||[]); setBudgets(b||[]); setLoading(false) },[mes])
+
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const [{data:t},{data:b}]=await Promise.all([supabase.from('transactions').select('category,amount,type').eq('month_ref',mes),supabase.from('budgets').select('*')])
+    setTxns(t||[]); setBudgets(b||[]); setLoading(false)
+  },[mes])
   useEffect(()=>{ load() },[load])
+
   const spent={};txns.filter(t=>t.type!=='receita').forEach(t=>{spent[t.category]=(spent[t.category]||0)+Number(t.amount)})
   const saveBudget=async(cat,val)=>{ const ex=budgets.find(b=>b.category===cat); if(ex) await supabase.from('budgets').update({amount:val}).eq('category',cat); else await supabase.from('budgets').insert({category:cat,amount:val}); setEditing(null); load() }
   const despCats=categories.filter(c=>c.type==='despesa').map(c=>c.name)
+
   return (
     <div>
       <div className="page-header"><h1>Orçamentos</h1></div>
@@ -382,18 +434,21 @@ function Relatorios() {
   const [searching,setSearching]=useState(false)
   const ano=new Date().getFullYear()
   const desktop=useDesktop()
+
   useEffect(()=>{
     const load=async()=>{
       const meses=Array.from({length:12},(_,i)=>`${ano}-${String(i+1).padStart(2,'0')}`)
       const {data:txns}=await supabase.from('transactions').select('month_ref,type,amount').in('month_ref',meses)
-      const byMes={};meses.forEach(m=>{byMes[m]={receitas:0,despesas:0}});
-      (txns||[]).forEach(t=>{if(!byMes[t.month_ref])return;if(t.type==='receita')byMes[t.month_ref].receitas+=Number(t.amount);else byMes[t.month_ref].despesas+=Number(t.amount)})
+      const byMes={};meses.forEach(m=>{byMes[m]={receitas:0,despesas:0}})
+      ;(txns||[]).forEach(t=>{if(!byMes[t.month_ref])return;if(t.type==='receita')byMes[t.month_ref].receitas+=Number(t.amount);else byMes[t.month_ref].despesas+=Number(t.amount)})
       setData(meses.map(m=>({mes:m,...byMes[m]}))); setLoading(false)
     }
     load()
   },[ano])
+
   const search=async()=>{ if(!busca.trim())return; setSearching(true); const {data}=await supabase.from('transactions').select('*').ilike('description',`%${busca}%`).order('date',{ascending:false}).limit(50); setResults(data||[]); setSearching(false) }
   const maxVal=Math.max(...data.map(d=>Math.max(d.receitas,d.despesas)),1)
+
   return (
     <div>
       <div className="page-header"><h1>Relatórios</h1><div className="subtitle">Visão anual {ano}</div></div>
@@ -409,8 +464,8 @@ function Relatorios() {
               {data.map((d,i)=>(
                 <div key={d.mes} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
                   <div style={{display:'flex',alignItems:'flex-end',gap:2,height:120}}>
-                    <div style={{width:desktop?14:8,background:'var(--green)',height:`${(d.receitas/maxVal*100).toFixed(1)}%`,borderRadius:'3px 3px 0 0',minHeight:d.receitas>0?3:0,transition:'height .4s'}}/>
-                    <div style={{width:desktop?14:8,background:'var(--red)',height:`${(d.despesas/maxVal*100).toFixed(1)}%`,borderRadius:'3px 3px 0 0',minHeight:d.despesas>0?3:0,transition:'height .4s'}}/>
+                    <div style={{width:desktop?14:8,background:'var(--green)',height:`${(d.receitas/maxVal*100).toFixed(1)}%`,borderRadius:'3px 3px 0 0',minHeight:d.receitas>0?3:0}}/>
+                    <div style={{width:desktop?14:8,background:'var(--red)',height:`${(d.despesas/maxVal*100).toFixed(1)}%`,borderRadius:'3px 3px 0 0',minHeight:d.despesas>0?3:0}}/>
                   </div>
                   <div style={{fontSize:desktop?10:9,color:'var(--gray-500)',textAlign:'center'}}>{MESES_NOMES[i].slice(0,3)}</div>
                 </div>
@@ -454,19 +509,33 @@ function Relatorios() {
 
 // ── RECORRENTES ───────────────────────────────────────────────────────────────
 function Recorrentes({ mes, toast }) {
+  const {categories,cards,members}=useApp()
   const [recurrings,setRecurrings]=useState([])
   const [loading,setLoading]=useState(true)
   const [showForm,setShowForm]=useState(false)
-  const [form,setForm]=useState({description:'',type:'fixo',category:'',member:'',card:'N/A',amount:''})
-  const {categories,cards,members}=useAppData()
+  const [rDesc,setRDesc]=useState('')
+  const [rType,setRType]=useState('fixo')
+  const [rCat,setRCat]=useState('')
+  const [rMember,setRMember]=useState('')
+  const [rCard,setRCard]=useState('N/A')
+  const [rAmount,setRAmount]=useState('')
+
   const load=useCallback(async()=>{ setLoading(true); const {data}=await supabase.from('recurring').select('*').order('description'); setRecurrings(data||[]); setLoading(false) },[])
   useEffect(()=>{ load() },[load])
-  const addRecurring=async()=>{ if(!form.description||!form.amount||!form.category){toast('Preencha todos os campos','error');return}; await supabase.from('recurring').insert({...form,amount:parseFloat(form.amount),active:true}); toast('Recorrente cadastrado!','success'); setForm({description:'',type:'fixo',category:'',member:'',card:'N/A',amount:''}); setShowForm(false); load() }
+
+  const addRecurring=async()=>{
+    if(!rDesc||!rAmount||!rCat){toast('Preencha todos os campos','error');return}
+    await supabase.from('recurring').insert({description:rDesc,type:rType,category:rCat,member:rMember,card:rCard,amount:parseFloat(rAmount),active:true})
+    toast('Recorrente cadastrado!','success')
+    setRDesc(''); setRAmount(''); setRCat(''); setRMember(''); setShowForm(false); load()
+  }
+
   const lancarMes=async(rec)=>{ const {error}=await supabase.from('transactions').insert({date:`${mes}-01`,description:rec.description,type:rec.type,category:rec.category,member:rec.member||'',card:rec.card||'N/A',installments:1,amount:rec.amount,notes:'Recorrente automático',month_ref:mes}); if(error)toast('Erro: '+error.message,'error'); else toast(`"${rec.description}" lançado!`,'success') }
   const lancarTodos=async()=>{ const ativos=recurrings.filter(r=>r.active); for(const r of ativos)await lancarMes(r); toast(`${ativos.length} lançamentos criados!`,'success') }
   const toggleActive=async(id,active)=>{ await supabase.from('recurring').update({active:!active}).eq('id',id); load() }
   const del=async id=>{ if(!window.confirm('Remover?'))return; await supabase.from('recurring').delete().eq('id',id); load() }
-  const cats=categories.filter(c=>form.type==='receita'?c.type==='receita':c.type==='despesa')
+  const cats=categories.filter(c=>rType==='receita'?c.type==='receita':c.type==='despesa')
+
   return (
     <div>
       <div className="page-header"><h1>Recorrentes</h1><div className="subtitle">Lançamentos automáticos mensais</div></div>
@@ -477,14 +546,14 @@ function Recorrentes({ mes, toast }) {
       {showForm&&(
         <div className="form-card" style={{margin:'0 16px 16px'}}>
           <div style={{fontFamily:'var(--font-display)',fontSize:16,marginBottom:14}}>Novo recorrente</div>
-          <div className="form-group"><label className="form-label">Descrição</label><input className="form-input" placeholder="Ex: Conta Vivo" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))}/></div>
+          <div className="form-group"><label className="form-label">Descrição</label><input className="form-input" placeholder="Ex: Conta Vivo" value={rDesc} onChange={e=>setRDesc(e.target.value)}/></div>
           <div className="form-row">
-            <div className="form-group"><label className="form-label">Tipo</label><select className="form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value,category:''}))}>{TIPOS.map(t=><option key={t} value={t}>{TIPO_LABELS[t]}</option>)}</select></div>
-            <div className="form-group"><label className="form-label">Valor</label><input type="number" className="form-input" placeholder="0,00" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))}/></div>
+            <div className="form-group"><label className="form-label">Tipo</label><select className="form-select" value={rType} onChange={e=>{setRType(e.target.value);setRCat('')}}>{TIPOS.map(t=><option key={t} value={t}>{TIPO_LABELS[t]}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Valor</label><input type="number" className="form-input" placeholder="0,00" value={rAmount} onChange={e=>setRAmount(e.target.value)}/></div>
           </div>
           <div className="form-row">
-            <div className="form-group"><label className="form-label">Categoria</label><select className="form-select" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}><option value="">Selecione</option>{cats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
-            <div className="form-group"><label className="form-label">Membro</label><select className="form-select" value={form.member} onChange={e=>setForm(f=>({...f,member:e.target.value}))}><option value="">—</option>{members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Categoria</label><select className="form-select" value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Selecione</option>{cats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Membro</label><select className="form-select" value={rMember} onChange={e=>setRMember(e.target.value)}><option value="">—</option>{members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}</select></div>
           </div>
           <button className="btn-primary" onClick={addRecurring}>✓ Salvar recorrente</button>
         </div>
@@ -513,25 +582,32 @@ function Recorrentes({ mes, toast }) {
 
 // ── CONFIGURAÇÕES ─────────────────────────────────────────────────────────────
 function Configuracoes({ toast }) {
-  const {categories,cards,members,loadGlobal}=useAppData()
-  const [newCat,setNewCat]=useState({name:'',type:'despesa'})
+  const {categories,cards,members,reloadGlobal}=useApp()
+  const [newCatName,setNewCatName]=useState('')
+  const [newCatType,setNewCatType]=useState('despesa')
   const [newCard,setNewCard]=useState('')
   const [newMbr,setNewMbr]=useState('')
-  const addCat=async()=>{ if(!newCat.name.trim())return; const {error}=await supabase.from('categories').insert({name:newCat.name.trim(),type:newCat.type}); if(error)toast('Já existe esta categoria','error'); else{toast('Adicionado!','success');setNewCat({name:'',type:'despesa'});loadGlobal()} }
-  const delCat=async id=>{ await supabase.from('categories').delete().eq('id',id); loadGlobal() }
-  const addCard=async()=>{ if(!newCard.trim())return; await supabase.from('cards').insert({name:newCard.trim()}); toast('Cartão adicionado!','success'); setNewCard(''); loadGlobal() }
-  const delCard=async id=>{ await supabase.from('cards').delete().eq('id',id); loadGlobal() }
-  const addMbr=async()=>{ if(!newMbr.trim())return; await supabase.from('members').insert({name:newMbr.trim()}); toast('Membro adicionado!','success'); setNewMbr(''); loadGlobal() }
-  const delMbr=async id=>{ await supabase.from('members').delete().eq('id',id); loadGlobal() }
+
+  const addCat=async()=>{ if(!newCatName.trim())return; const {error}=await supabase.from('categories').insert({name:newCatName.trim(),type:newCatType}); if(error)toast('Já existe','error'); else{toast('Adicionado!','success');setNewCatName('');reloadGlobal()} }
+  const delCat=async id=>{ await supabase.from('categories').delete().eq('id',id); reloadGlobal() }
+  const addCard=async()=>{ if(!newCard.trim())return; await supabase.from('cards').insert({name:newCard.trim()}); toast('Cartão adicionado!','success'); setNewCard(''); reloadGlobal() }
+  const delCard=async id=>{ await supabase.from('cards').delete().eq('id',id); reloadGlobal() }
+  const addMbr=async()=>{ if(!newMbr.trim())return; await supabase.from('members').insert({name:newMbr.trim()}); toast('Membro adicionado!','success'); setNewMbr(''); reloadGlobal() }
+  const delMbr=async id=>{ await supabase.from('members').delete().eq('id',id); reloadGlobal() }
+
   const Sec=({title,children})=><div className="form-card" style={{marginBottom:12}}><div style={{fontFamily:'var(--font-display)',fontSize:17,marginBottom:14,fontWeight:400}}>{title}</div>{children}</div>
-  const Row=({name,onDel,badge})=><div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}>{badge&&<span className={`badge badge-${badge}`}>{badge==='despesa'?'Despesa':'Receita'}</span>}<span style={{flex:1,fontSize:14}}>{name}</span><button className="btn-danger" style={{padding:'3px 10px',fontSize:12}} onClick={onDel}>Remover</button></div>
+  const Row=({name,onDel})=><div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}><span style={{flex:1,fontSize:14}}>{name}</span><button className="btn-danger" style={{padding:'3px 10px',fontSize:12}} onClick={onDel}>Remover</button></div>
+
   return (
     <div>
       <div className="page-header"><h1>Configurações</h1></div>
       <div style={{padding:'16px 0'}}>
         <Sec title="👨‍👩‍👧 Membros da família">
           {members.map(m=><Row key={m.id} name={m.name} onDel={()=>delMbr(m.id)}/>)}
-          <div style={{display:'flex',gap:8,marginTop:12}}><input className="form-input" style={{flex:1,margin:0}} placeholder="Nome do membro" value={newMbr} onChange={e=>setNewMbr(e.target.value)}/><button className="btn-secondary" onClick={addMbr}>+ Adicionar</button></div>
+          <div style={{display:'flex',gap:8,marginTop:12}}>
+            <input className="form-input" style={{flex:1,margin:0}} placeholder="Nome do membro" value={newMbr} onChange={e=>setNewMbr(e.target.value)}/>
+            <button className="btn-secondary" onClick={addMbr}>+ Adicionar</button>
+          </div>
         </Sec>
         <Sec title="🏷️ Categorias">
           <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.05em'}}>Despesas</div>
@@ -539,16 +615,19 @@ function Configuracoes({ toast }) {
           <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',margin:'12px 0 6px',textTransform:'uppercase',letterSpacing:'.05em'}}>Receitas</div>
           {categories.filter(c=>c.type==='receita').map(c=><Row key={c.id} name={c.name} onDel={()=>delCat(c.id)}/>)}
           <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
-            <input className="form-input" style={{flex:2,margin:0,minWidth:120}} placeholder="Nova categoria" value={newCat.name} onChange={e=>setNewCat(v=>({...v,name:e.target.value}))}/>
-            <select className="form-select" style={{flex:1,margin:0,minWidth:100}} value={newCat.type} onChange={e=>setNewCat(v=>({...v,type:e.target.value}))}><option value="despesa">Despesa</option><option value="receita">Receita</option></select>
+            <input className="form-input" style={{flex:2,margin:0,minWidth:120}} placeholder="Nova categoria" value={newCatName} onChange={e=>setNewCatName(e.target.value)}/>
+            <select className="form-select" style={{flex:1,margin:0,minWidth:100}} value={newCatType} onChange={e=>setNewCatType(e.target.value)}><option value="despesa">Despesa</option><option value="receita">Receita</option></select>
             <button className="btn-secondary" onClick={addCat}>+ Add</button>
           </div>
         </Sec>
         <Sec title="💳 Cartões">
           {cards.map(c=><Row key={c.id} name={c.name} onDel={()=>delCard(c.id)}/>)}
-          <div style={{display:'flex',gap:8,marginTop:12}}><input className="form-input" style={{flex:1,margin:0}} placeholder="Ex: Nubank 1234" value={newCard} onChange={e=>setNewCard(e.target.value)}/><button className="btn-secondary" onClick={addCard}>+ Adicionar</button></div>
+          <div style={{display:'flex',gap:8,marginTop:12}}>
+            <input className="form-input" style={{flex:1,margin:0}} placeholder="Ex: Nubank 1234" value={newCard} onChange={e=>setNewCard(e.target.value)}/>
+            <button className="btn-secondary" onClick={addCard}>+ Adicionar</button>
+          </div>
         </Sec>
-        <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:'var(--radius-md)',padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início" para usar como app.</div></div>
+        <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:'var(--radius-md)',padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>
       </div>
     </div>
   )
@@ -556,33 +635,25 @@ function Configuracoes({ toast }) {
 
 // ── SIDEBAR DESKTOP ───────────────────────────────────────────────────────────
 function Sidebar({ tab, setTab }) {
-  const navItems = [
-    { id:'dashboard',  label:'Início',     icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg> },
-    { id:'lancamentos',label:'Extrato',    icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg> },
-    { id:'novo',       label:'Lançar',     icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> },
-    { id:'importar',   label:'Fatura PDF', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg> },
+  const navItems=[
+    {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
+    {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>},
+    {id:'novo',label:'Lançar',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>},
+    {id:'importar',label:'Fatura PDF',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
   ]
-  const moreItems = [
-    { id:'orcamentos',  label:'Orçamentos',  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> },
-    { id:'relatorios',  label:'Relatórios',  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/></svg> },
-    { id:'recorrentes', label:'Recorrentes', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg> },
-    { id:'config',      label:'Configurações',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg> },
+  const moreItems=[
+    {id:'orcamentos',label:'Orçamentos',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>},
+    {id:'relatorios',label:'Relatórios',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>},
+    {id:'recorrentes',label:'Recorrentes',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>},
+    {id:'config',label:'Configurações',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>},
   ]
   return (
     <aside className="sidebar">
       <div className="sidebar-logo"><h2>Finanças Maciel</h2><p>Controle financeiro familiar</p></div>
       <nav className="sidebar-nav">
-        {navItems.map(t=>(
-          <button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>
-            {t.icon}{t.label}
-          </button>
-        ))}
+        {navItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
         <div className="sidebar-section-label">Mais</div>
-        {moreItems.map(t=>(
-          <button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>
-            {t.icon}{t.label}
-          </button>
-        ))}
+        {moreItems.map(t=><button key={t.id} className={`sidebar-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.icon}{t.label}</button>)}
       </nav>
     </aside>
   )
@@ -597,15 +668,31 @@ export default function App() {
   const desktop=useDesktop()
   const toast=(msg,type='success')=>setToastData({msg,type})
 
-  const mobileTabs = [
-    { id:'dashboard',  label:'Início',  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg> },
-    { id:'lancamentos',label:'Extrato', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg> },
-    { id:'novo',       label:'Lançar',  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> },
-    { id:'importar',   label:'Fatura',  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg> },
-    { id:'mais',       label:'Mais',    icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg> },
+  // Dados globais carregados UMA VEZ aqui — não dentro de cada tela
+  const [categories,setCategories]=useState([])
+  const [cards,setCards]=useState([])
+  const [members,setMembers]=useState([])
+
+  const reloadGlobal=useCallback(async()=>{
+    const [{data:cats},{data:cds},{data:mbrs}]=await Promise.all([
+      supabase.from('categories').select('*').order('name'),
+      supabase.from('cards').select('*').order('name'),
+      supabase.from('members').select('*').order('name'),
+    ])
+    setCategories(cats||[]); setCards(cds||[]); setMembers(mbrs||[])
+  },[])
+
+  useEffect(()=>{ reloadGlobal() },[reloadGlobal])
+
+  const mobileTabs=[
+    {id:'dashboard',label:'Início',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>},
+    {id:'lancamentos',label:'Extrato',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>},
+    {id:'novo',label:'Lançar',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>},
+    {id:'importar',label:'Fatura',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
+    {id:'mais',label:'Mais',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>},
   ]
 
-  const content = (
+  const content=(
     <>
       {tab==='dashboard'   && <Dashboard mes={mes} setMes={setMes}/>}
       {tab==='lancamentos' && <Lancamentos mes={mes} setMes={setMes} toast={toast}/>}
@@ -619,36 +706,38 @@ export default function App() {
   )
 
   return (
-    <div className="app-shell">
-      {desktop && <Sidebar tab={tab} setTab={setTab}/>}
-      <div className="page-content">
-        {desktop ? <div className="page-inner">{content}</div> : content}
-      </div>
+    <AppCtx.Provider value={{categories,cards,members,reloadGlobal}}>
+      <div className="app-shell">
+        {desktop&&<Sidebar tab={tab} setTab={setTab}/>}
+        <div className="page-content">
+          {desktop?<div className="page-inner">{content}</div>:content}
+        </div>
 
-      {!desktop && showMais && (
-        <div style={{position:'fixed',bottom:70,left:0,right:0,background:'var(--white)',borderTop:'1px solid var(--gray-100)',padding:'12px 16px',zIndex:99,boxShadow:'0 -4px 20px rgba(0,0,0,0.08)'}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-            {[{id:'orcamentos',label:'Orçamentos',icon:'🎯'},{id:'relatorios',label:'Relatórios',icon:'📊'},{id:'recorrentes',label:'Recorrentes',icon:'🔁'},{id:'config',label:'Config.',icon:'⚙️'}].map(t=>(
-              <button key={t.id} onClick={()=>{setTab(t.id);setShowMais(false)}} style={{padding:'14px',background:tab===t.id?'var(--green-pale)':'var(--gray-50)',border:`1px solid ${tab===t.id?'var(--green)':'var(--gray-100)'}`,borderRadius:'var(--radius-md)',cursor:'pointer',display:'flex',alignItems:'center',gap:10,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,color:tab===t.id?'var(--green)':'var(--gray-700)'}}>
-                <span style={{fontSize:20}}>{t.icon}</span>{t.label}
+        {!desktop&&showMais&&(
+          <div style={{position:'fixed',bottom:70,left:0,right:0,background:'var(--white)',borderTop:'1px solid var(--gray-100)',padding:'12px 16px',zIndex:99,boxShadow:'0 -4px 20px rgba(0,0,0,0.08)'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {[{id:'orcamentos',label:'Orçamentos',icon:'🎯'},{id:'relatorios',label:'Relatórios',icon:'📊'},{id:'recorrentes',label:'Recorrentes',icon:'🔁'},{id:'config',label:'Config.',icon:'⚙️'}].map(t=>(
+                <button key={t.id} onClick={()=>{setTab(t.id);setShowMais(false)}} style={{padding:'14px',background:tab===t.id?'var(--green-pale)':'var(--gray-50)',border:`1px solid ${tab===t.id?'var(--green)':'var(--gray-100)'}`,borderRadius:'var(--radius-md)',cursor:'pointer',display:'flex',alignItems:'center',gap:10,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,color:tab===t.id?'var(--green)':'var(--gray-700)'}}>
+                  <span style={{fontSize:20}}>{t.icon}</span>{t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!desktop&&(
+          <nav className="bottom-nav">
+            {mobileTabs.map(t=>(
+              <button key={t.id} className={`nav-item ${(tab===t.id||(t.id==='mais'&&showMais))?'active':''}`}
+                onClick={()=>{ if(t.id==='mais'){setShowMais(v=>!v)}else{setTab(t.id);setShowMais(false)} }}>
+                {t.icon}{t.label}
               </button>
             ))}
-          </div>
-        </div>
-      )}
+          </nav>
+        )}
 
-      {!desktop && (
-        <nav className="bottom-nav">
-          {mobileTabs.map(t=>(
-            <button key={t.id} className={`nav-item ${(tab===t.id||(t.id==='mais'&&showMais))?'active':''}`}
-              onClick={()=>{ if(t.id==='mais'){setShowMais(v=>!v)} else{setTab(t.id);setShowMais(false)} }}>
-              {t.icon}{t.label}
-            </button>
-          ))}
-        </nav>
-      )}
-
-      {toastData && <Toast msg={toastData.msg} type={toastData.type} onHide={()=>setToastData(null)}/>}
-    </div>
+        {toastData&&<Toast msg={toastData.msg} type={toastData.type} onHide={()=>setToastData(null)}/>}
+      </div>
+    </AppCtx.Provider>
   )
 }
