@@ -723,7 +723,82 @@ function ImportarJSON({ mes, toast }) {
     </div>
   )
 }
+// ── PARCELAS ──────────────────────────────────────────────────────────────────
+function Parcelas({ mes, setMes }) {
+  const [parcelas,setParcelas]=useState([])
+  const [loading,setLoading]=useState(true)
 
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const meses=[]
+    const [y,m]=mes.split('-').map(Number)
+    for(let i=0;i<12;i++){
+      const d=new Date(y,m-1+i,1)
+      meses.push(d.toISOString().slice(0,7))
+    }
+    const {data}=await supabase.from('installments').select('*').in('month_ref',meses).order('month_ref').order('description')
+    setParcelas(data||[]); setLoading(false)
+  },[mes])
+  useEffect(()=>{ load() },[load])
+
+  const byMes={}
+  parcelas.forEach(p=>{ if(!byMes[p.month_ref]) byMes[p.month_ref]=[]; byMes[p.month_ref].push(p) })
+
+  return (
+    <div>
+      <div className="page-header"><h1>Parcelas</h1><div className="subtitle">Compromissos futuros dos cartões</div></div>
+      <MonthNav mes={mes} setMes={setMes}/>
+      {loading?<div className="loading"><div className="spinner"/></div>:(
+        parcelas.length===0
+          ?<div className="empty-state"><div className="icon">✅</div><h3>Nenhuma parcela futura</h3><p>Suas compras parceladas aparecerão aqui após a importação.</p></div>
+          :<div>
+            <div className="section" style={{paddingTop:16}}>
+              <div className="section-title">Resumo dos próximos meses</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+                {Object.entries(byMes).sort(([a],[b])=>a.localeCompare(b)).slice(0,6).map(([mesRef,items])=>{
+                  const total=items.reduce((s,p)=>s+Number(p.installment_amount),0)
+                  return(
+                    <div key={mesRef} style={{background:'var(--white)',borderRadius:12,padding:'12px 14px',boxShadow:'var(--shadow-sm)',border:'1px solid rgba(15,26,18,.05)'}}>
+                      <div style={{fontSize:11,fontWeight:600,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:4}}>{fmtM(mesRef)}</div>
+                      <div style={{fontSize:18,fontWeight:500,color:'var(--amber)',fontFamily:'var(--font-display)'}}>{fmt(total)}</div>
+                      <div style={{fontSize:11,color:'var(--gray-500)',marginTop:2}}>{items.length} parcela(s)</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="section">
+              <div className="section-title">Detalhe por mês</div>
+              {Object.entries(byMes).sort(([a],[b])=>a.localeCompare(b)).map(([mesRef,items])=>{
+                const total=items.reduce((s,p)=>s+Number(p.installment_amount),0)
+                return(
+                  <div key={mesRef} style={{marginBottom:16}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,padding:'8px 0',borderBottom:'2px solid var(--gray-100)'}}>
+                      <span style={{fontFamily:'var(--font-display)',fontSize:15,fontWeight:400}}>{fmtM(mesRef)}</span>
+                      <span style={{fontSize:14,fontWeight:700,color:'var(--amber)'}}>{fmt(total)}</span>
+                    </div>
+                    {items.map(p=>(
+                      <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--gray-100)'}}>
+                        <div style={{width:32,height:32,borderRadius:8,background:'var(--purple-light)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>💳</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:14,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.description}</div>
+                          <div style={{fontSize:11,color:'var(--gray-500)'}}>{p.category} · {p.card} · <span style={{color:'var(--purple)',fontWeight:600}}>{p.current_installment}/{p.total_installments}x</span></div>
+                        </div>
+                        <div style={{textAlign:'right',flexShrink:0}}>
+                          <div style={{fontSize:14,fontWeight:600}}>{fmt(p.installment_amount)}</div>
+                          <div style={{fontSize:10,color:'var(--gray-500)'}}>de {fmt(p.total_amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+      )}
+    </div>
+  )
+}
 // ── ORÇAMENTOS ────────────────────────────────────────────────────────────────
 function Orcamentos({ mes, setMes }) {
   const {categories}=useApp()
