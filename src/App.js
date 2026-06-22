@@ -490,6 +490,7 @@ function ImportarJSON({ mes, toast }) {
   const [parsed,setParsed]=useState(null)
   const [selected,setSelected]=useState({})
   const [loading,setLoading]=useState(false)
+  const [progress,setProgress]=useState('')
   const [selectedCardName,setSelectedCardName]=useState('Sicredi 7146')
   const [useAutoMonth,setUseAutoMonth]=useState(false)
   const [manualMonth,setManualMonth]=useState(mes)
@@ -503,7 +504,6 @@ function ImportarJSON({ mes, toast }) {
       if(!Array.isArray(arr)||!arr.length) throw new Error('Nenhuma transação encontrada')
       const valid=arr.filter(t=>t.amount>0&&t.description)
       if(!valid.length) throw new Error('Nenhum lançamento válido')
-
       const enriched=valid.map(t=>{
         const installInfo=parseInstallment(t.description)
         const targetMes=useAutoMonth&&cardInfo?.closing_day
@@ -511,7 +511,6 @@ function ImportarJSON({ mes, toast }) {
           : manualMonth
         return { ...t, installInfo, targetMes, isInstallment:!!installInfo }
       })
-
       setParsed(enriched)
       const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
@@ -520,132 +519,141 @@ function ImportarJSON({ mes, toast }) {
   const importar=async()=>{
     const toImport=parsed.filter((_,i)=>selected[i])
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
-    setLoading(true)
+    setLoading(true); setProgress('Inserindo lançamentos...')
 
-    let totalImported=0
-    let totalCriadas=0
-    let totalAtualizadas=0
+    // 1. Inserir TODOS os lançamentos atuais de uma vez
+    const txnRows=toImport.map(t=>({
+      date:t.date,
+      description:t.description,
+      type:'cartao',
+      category:t.category||'Outros',
+      member:t.member||'',
+      card:t.card||selectedCardName,
+      installments:t.installInfo?t.installInfo.total:1,
+      amount:t.amount,
+      notes:t.notes||'',
+      month_ref:t.targetMes
+    }))
 
-    for(const t of toImport){
-      // 1. Inserir a parcela ATUAL
-      const {data:inserted,error}=await supabase.from('transactions').insert({
-        date:t.date,
-        description:t.description,
-        type:'cartao',
+    const {data:inserted,error}=await supabase.from('transactions').insert(txnRows).select()
+    if(error){toast('Erro: '+error.message,'error');setLoading(false);setProgress('');return}
+
+    setProgress('Criando parcelas futuras...')
+
+    // 2. Montar TODAS as parcelas futuras de uma vez
+    const allFutureTxns=[]
+    const allInstallRows=[]
+
+    toImport.forEach((t,idx)=>{
+      if(!t.installInfo) return
+      const groupId=crypto.randomUUID()
+      const descBase=t.description.replace(/\s*\d{1,2}\/\d{1,2}$/, '').trim()
+      const [y,m]=t.targetMes.split('-').map(Number)
+      const remainingCount=t.installInfo.total-t.installInfo.current
+
+      // Registrar parcela atual no installments
+      allInstallRows.push({
+        group_id:groupId,
+        description:descBase,
+        total_amount:t.amount*t.installInfo.total,
+        installment_amount:t.amount,
+        total_installments:t.installInfo.total,
+        current_installment:t.installInfo.current,
+        card:t.card||selectedCardName,
         category:t.category||'Outros',
         member:t.member||'',
-        card:t.card||selectedCardName,
-        installments:t.installInfo?t.installInfo.total:1,
-        amount:t.amount,
-        notes:t.notes||'',
-        month_ref:t.targetMes
-      }).select().single()
+        month_ref:t.targetMes,
+        transaction_id:inserted[idx]?.id||null
+      })
 
-      if(error){ console.error(error); continue }
-      totalImported++
-
-      if(t.installInfo){
-        const descBase=t.description.replace(/\s*\d{1,2}\/\d{1,2}$/,'').trim()
-        const remainingCount=t.installInfo.total-t.installInfo.current
-
-        // Buscar group_id existente para essa compra parcelada
-        const {data:existingGroup}=await supabase
-          .from('installments')
-          .select('group_id')
-          .ilike('description', descBase)
-          .eq('total_installments', t.installInfo.total)
-          .limit(1)
-          .single()
-
-        const groupId=existingGroup?.group_id||crypto.randomUUID()
-
-        // Registrar parcela atual
-        await supabase.from('installments').insert({
-          group_id:groupId,
-          description:descBase,
-          total_amount:t.amount*t.installInfo.total,
-          installment_amount:t.amount,
-          total_installments:t.installInfo.total,
-          current_installment:t.installInfo.current,
-          card:t.card||selectedCardName,
+      // Parcelas futuras
+      for(let i=1;i<=remainingCount;i++){
+        const futMes=new Date(y,m-1+i,1).toISOString().slice(0,7)
+        const parcelNum=t.installInfo.current+i
+        const futDesc=`${descBase} ${parcelNum}/${t.installInfo.total}`
+        allFutureTxns.push({
+          _groupId:groupId,
+          _parcelNum:parcelNum,
+          _descBase:descBase,
+          _total:t.installInfo.total,
+          _amount:t.amount,
+          date:t.date,
+          description:futDesc,
+          type:'cartao',
           category:t.category||'Outros',
           member:t.member||'',
-          month_ref:t.targetMes,
-          transaction_id:inserted.id
+          card:t.card||selectedCardName,
+          installments:t.installInfo.total,
+          amount:t.amount,
+          notes:'Parcela futura (valor estimado)',
+          month_ref:futMes
         })
+      }
+    })
 
-        // 2. Criar ou atualizar parcelas FUTURAS
-        if(remainingCount>0){
-          const [y,m]=t.targetMes.split('-').map(Number)
+    // 3. Inserir parcelas futuras em lotes de 50
+    let futureInserted=[]
+    if(allFutureTxns.length>0){
+      // Verificar quais já existem para evitar duplicatas
+      setProgress(`Verificando duplicatas...`)
+      const descBases=[...new Set(allFutureTxns.map(t=>t._descBase))]
+      const {data:existingInst}=await supabase
+        .from('installments')
+        .select('group_id,current_installment,total_installments,description')
+        .in('description', descBases)
 
-          for(let i=1;i<=remainingCount;i++){
-            const futMes=new Date(y,m-1+i,1).toISOString().slice(0,7)
-            const parcelNum=t.installInfo.current+i
-            const futDesc=`${descBase} ${parcelNum}/${t.installInfo.total}`
+      const existingKeys=new Set(
+        (existingInst||[]).map(e=>`${e.description}|${e.current_installment}|${e.total_installments}`)
+      )
 
-            // Verificar se já existe essa parcela futura
-            const {data:existing}=await supabase
-              .from('installments')
-              .select('id, transaction_id')
-              .eq('group_id', groupId)
-              .eq('current_installment', parcelNum)
-              .eq('total_installments', t.installInfo.total)
-              .single()
+      const newFutureTxns=allFutureTxns.filter(t=>{
+        const key=`${t._descBase}|${t._parcelNum}|${t._total}`
+        return !existingKeys.has(key)
+      })
 
-            if(existing){
-              // Já existe — atualizar valor se mudou
-              await supabase.from('installments')
-                .update({ installment_amount:t.amount, total_amount:t.amount*t.installInfo.total })
-                .eq('id', existing.id)
-
-              if(existing.transaction_id){
-                await supabase.from('transactions')
-                  .update({ amount:t.amount, notes:'Valor atualizado pela fatura real' })
-                  .eq('id', existing.transaction_id)
-              }
-              totalAtualizadas++
-            } else {
-              // Não existe — criar nova
-              const {data:futTxn}=await supabase.from('transactions').insert({
-                date:t.date,
-                description:futDesc,
-                type:'cartao',
-                category:t.category||'Outros',
-                member:t.member||'',
-                card:t.card||selectedCardName,
-                installments:t.installInfo.total,
-                amount:t.amount,
-                notes:'Parcela futura (valor estimado)',
-                month_ref:futMes
-              }).select().single()
-
-              if(futTxn){
-                await supabase.from('installments').insert({
-                  group_id:groupId,
-                  description:descBase,
-                  total_amount:t.amount*t.installInfo.total,
-                  installment_amount:t.amount,
-                  total_installments:t.installInfo.total,
-                  current_installment:parcelNum,
-                  card:t.card||selectedCardName,
-                  category:t.category||'Outros',
-                  member:t.member||'',
-                  month_ref:futMes,
-                  transaction_id:futTxn.id
-                })
-                totalCriadas++
-              }
-            }
-          }
+      if(newFutureTxns.length>0){
+        setProgress(`Inserindo ${newFutureTxns.length} parcelas futuras...`)
+        const txnOnly=newFutureTxns.map(({_groupId,_parcelNum,_descBase,_total,_amount,...rest})=>rest)
+        
+        // Inserir em lotes de 50
+        for(let i=0;i<txnOnly.length;i+=50){
+          const batch=txnOnly.slice(i,i+50)
+          const {data:batchInserted}=await supabase.from('transactions').insert(batch).select()
+          if(batchInserted) futureInserted=[...futureInserted,...batchInserted]
         }
+
+        // Montar installment rows para as futuras
+        newFutureTxns.forEach((t,i)=>{
+          if(futureInserted[i]){
+            allInstallRows.push({
+              group_id:t._groupId,
+              description:t._descBase,
+              total_amount:t._amount*t._total,
+              installment_amount:t._amount,
+              total_installments:t._total,
+              current_installment:t._parcelNum,
+              card:t.card||selectedCardName,
+              category:t.category||'Outros',
+              member:t.member||'',
+              month_ref:t.month_ref,
+              transaction_id:futureInserted[i].id
+            })
+          }
+        })
       }
     }
 
-    setLoading(false)
-    let msg=`${totalImported} lançamentos importados!`
-    if(totalCriadas>0) msg+=` + ${totalCriadas} parcelas futuras criadas`
-    if(totalAtualizadas>0) msg+=` + ${totalAtualizadas} parcelas atualizadas`
-    toast(msg,'success')
+    // 4. Inserir todos os installment rows em lote
+    if(allInstallRows.length>0){
+      setProgress('Registrando parcelas...')
+      for(let i=0;i<allInstallRows.length;i+=50){
+        await supabase.from('installments').insert(allInstallRows.slice(i,i+50))
+      }
+    }
+
+    setLoading(false); setProgress('')
+    const nFuturas=futureInserted.length
+    toast(`${inserted.length} lançamentos + ${nFuturas} parcelas futuras importados!`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
 
@@ -678,14 +686,9 @@ function ImportarJSON({ mes, toast }) {
             </div>
           </div>
         </div>
-        {cardInfo?.closing_day&&useAutoMonth&&(
-          <div style={{background:'var(--green-pale)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--green)',marginBottom:12}}>
-            📅 Fechamento dia <strong>{cardInfo.closing_day}</strong> · Compras após dia {cardInfo.closing_day} entram na fatura do mês seguinte
-          </div>
-        )}
         {!useAutoMonth&&(
           <div style={{background:'var(--amber-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--amber)',marginBottom:12}}>
-            📅 Todos os lançamentos serão importados para <strong>{fmtM(manualMonth)}</strong> · Parcelas futuras serão criadas automaticamente nos meses seguintes
+            📅 Todos os lançamentos irão para <strong>{fmtM(manualMonth)}</strong> · Parcelas futuras serão criadas nos meses seguintes
           </div>
         )}
         <div className="form-group">
@@ -703,7 +706,7 @@ function ImportarJSON({ mes, toast }) {
           </div>
           {nParcelados>0&&(
             <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:10}}>
-              💳 <strong>{nParcelados}</strong> parcelado(s) → <strong>{nFuturas}</strong> parcelas futuras serão criadas. Na próxima fatura, os valores reais serão atualizados automaticamente sem duplicar.
+              💳 <strong>{nParcelados}</strong> parcelado(s) → <strong>{nFuturas}</strong> parcelas futuras serão criadas. Na próxima fatura os valores reais serão atualizados sem duplicar.
             </div>
           )}
           <label style={{fontSize:13,display:'flex',alignItems:'center',gap:6,cursor:'pointer',marginBottom:10}}>
@@ -727,15 +730,20 @@ function ImportarJSON({ mes, toast }) {
               ))}</tbody>
             </table>
           </div>
+          {loading&&progress&&(
+            <div style={{background:'var(--green-pale)',borderRadius:8,padding:'10px 14px',marginBottom:8,fontSize:13,color:'var(--green)',display:'flex',alignItems:'center',gap:8}}>
+              <div className="spinner" style={{width:16,height:16,borderWidth:2}}/>
+              {progress}
+            </div>
+          )}
           <button className="btn-primary" onClick={importar} disabled={loading}>
-            {loading?'Importando...':`✓ Importar ${parsed.filter((_,i)=>selected[i]).length} lançamentos${nFuturas>0?` + ${nFuturas} parcelas futuras`:''}`}
+            {loading?'Importando...':'✓ Importar '+parsed.filter((_,i)=>selected[i]).length+' lançamentos'+(nFuturas>0?' + '+nFuturas+' parcelas futuras':'')}
           </button>
         </div>
       )}
     </div>
   )
 }
-
 
 // ── PARCELAS ──────────────────────────────────────────────────────────────────
 function Parcelas({ mes, setMes }) {
