@@ -19,21 +19,18 @@ const useDesktop = () => {
   return d
 }
 
+// Calcula mês ref baseado na data da compra e fechamento do cartão
 function calcMonthRef(purchaseDate, closingDay, manualMonthRef) {
   if (manualMonthRef) return manualMonthRef
   if (!purchaseDate || !closingDay) return todayYM()
   const d = new Date(purchaseDate)
   const day = d.getDate()
+  // Se a compra foi APÓS o fechamento, cai na próxima fatura
   if (day > closingDay) {
     const next = new Date(d.getFullYear(), d.getMonth() + 1, 1)
     return next.toISOString().slice(0,7)
   }
   return d.toISOString().slice(0,7)
-}
-
-function addMonths(ym, n) {
-  const [y,m] = ym.split('-').map(Number)
-  return new Date(y, m-1+n, 1).toISOString().slice(0,7)
 }
 
 // Extrai info de parcela do texto (ex: "01/12", "02/10")
@@ -127,6 +124,7 @@ function Dashboard({ mes, setMes }) {
   const maxCat=catEntries[0]?.[1]||1
   const byMember={};txns.filter(t=>t.type!=='receita').forEach(t=>{const k=t.member||'Família';byMember[k]=(byMember[k]||0)+Number(t.amount)})
 
+  // Parcelas dos próximos 3 meses
   const [futureParcelas,setFutureParcelas]=useState([])
   useEffect(()=>{
     const loadFuture=async()=>{
@@ -157,6 +155,7 @@ function Dashboard({ mes, setMes }) {
           <div className="metric-card amber"><div className="label">Cartão</div><div className="value">{fmt(cartao)}</div><div className="sub">{txns.filter(t=>t.type==='cartao').length} lançamentos</div></div>
         </div>
 
+        {/* Parcelas futuras */}
         {futureParcelas.length>0&&(
           <div className="section">
             <div className="section-title">⏳ Parcelas nos próximos meses</div>
@@ -349,6 +348,8 @@ function NovoLancamento({ mes, toast, onSaved }) {
   const [date,setDate]=useState(todayDate())
 
   const cats=categories.filter(c=>tipo==='receita'?c.type==='receita':c.type==='despesa')
+
+  // Calcular mês ref automático
   const cardInfo=cards.find(c=>c.name===selectedCard)
   const autoMonth=tipo==='cartao'&&cardInfo?.closing_day
     ? calcMonthRef(date, cardInfo.closing_day, null)
@@ -362,6 +363,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
     const installAmt=totalInstall>1?totalAmt/totalInstall:totalAmt
     const groupId=crypto.randomUUID()
 
+    // Inserir todos os lançamentos parcelados
     const rows=[]
     const installRows=[]
     for(let i=0;i<(totalInstall||1);i++){
@@ -374,6 +376,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
     const {data:inserted,error}=await supabase.from('transactions').insert(rows).select()
     if(error){toast('Erro: '+error.message,'error');setLoading(false);return}
 
+    // Registrar na tabela installments se parcelado
     if(totalInstall>1&&inserted){
       for(let i=0;i<inserted.length;i++){
         const [y,m]=effectiveMonth.split('-').map(Number)
@@ -390,7 +393,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
     }
 
     setLoading(false)
-    toast(totalInstall>1?`${totalInstall} parcelas criadas!`:'Lançamento salvo!','success')
+    toast(totalInstall>1?`${totalInstall} parcelas criadas de ${fmtM(effectiveMonth)} a ${fmtM((() => { const [y,m]=effectiveMonth.split('-').map(Number); return new Date(y,m-1+totalInstall-1,1).toISOString().slice(0,7) })())}!`:'Lançamento salvo!','success')
     setDesc(''); setAmount(''); setCategory(''); setMember(''); setNotes(''); setTotalInstall(1); setManualMonth('')
     onSaved()
   }
@@ -440,7 +443,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
         </div>
         {totalInstall>1&&amount&&(
           <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:12}}>
-            💳 {totalInstall}x de {fmt(parseFloat(amount)/totalInstall)} · Total: {fmt(parseFloat(amount))} · De <strong>{fmtM(effectiveMonth)}</strong> até <strong>{fmtM(addMonths(effectiveMonth,totalInstall-1))}</strong>
+            💳 {totalInstall}x de {fmt(parseFloat(amount)/totalInstall)} · Total: {fmt(parseFloat(amount))} · Lançamentos criados de <strong>{fmtM(effectiveMonth)}</strong> até <strong>{fmtM((()=>{ const [y,m]=effectiveMonth.split('-').map(Number); return new Date(y,m-1+totalInstall-1,1).toISOString().slice(0,7) })())}</strong>
           </div>
         )}
         <div className="form-row">
@@ -480,9 +483,7 @@ function NovoLancamento({ mes, toast, onSaved }) {
   )
 }
 
-// ── IMPORTAR JSON ─────────────────────────────────────────────────────────────
-// CORREÇÃO: parcelas detectadas são lançadas no mês da fatura (mes ref informado)
-// e as parcelas FUTURAS (2ª, 3ª, etc.) são criadas automaticamente nos meses seguintes.
+// ── IMPORTAR JSON — com detecção de parcelas e fechamento ────────────────────
 function ImportarJSON({ mes, toast }) {
   const {categories,cards}=useApp()
   const [json,setJson]=useState('')
@@ -490,7 +491,7 @@ function ImportarJSON({ mes, toast }) {
   const [selected,setSelected]=useState({})
   const [loading,setLoading]=useState(false)
   const [selectedCardName,setSelectedCardName]=useState('Sicredi 7146')
-  const [useAutoMonth,setUseAutoMonth]=useState(false)
+  const [useAutoMonth,setUseAutoMonth]=useState(true)
   const [manualMonth,setManualMonth]=useState(mes)
   const catNames=categories.filter(c=>c.type==='despesa').map(c=>c.name)
 
@@ -498,31 +499,27 @@ function ImportarJSON({ mes, toast }) {
 
   const processar=()=>{
     try{
-      const obj=JSON.parse(json)
-      const arr=obj.transactions||obj
+      const obj=JSON.parse(json); const arr=obj.transactions||obj
       if(!Array.isArray(arr)||!arr.length) throw new Error('Nenhuma transação encontrada')
       const valid=arr.filter(t=>t.amount>0&&t.description)
       if(!valid.length) throw new Error('Nenhum lançamento válido')
 
+      // Detectar parcelas e calcular mês ref
       const enriched=valid.map(t=>{
         const installInfo=parseInstallment(t.description)
+        const autoMes=cardInfo?.closing_day
+          ? calcMonthRef(t.date, cardInfo.closing_day, null)
+          : (t.date?.slice(0,7)||mes)
 
-        // Se Auto: calcula mês pela data + fechamento do cartão
-        // Se Manual (padrão): usa o mês informado pelo usuário (= mês da fatura)
-        let targetMes
-        if(useAutoMonth && cardInfo?.closing_day) {
-          targetMes = calcMonthRef(t.date, cardInfo.closing_day, null)
-        } else {
-          // Para TODOS os lançamentos (parcelados ou não), o mês base é o mês da fatura
-          targetMes = manualMonth
+        // Ajustar mês baseado na parcela atual
+        let targetMes=useAutoMonth?autoMes:manualMonth
+        if(installInfo){
+          // Já é a parcela atual — o mês base é calculado como se fosse a parcela 1
+          // targetMes permanece como calculado
         }
-
-        // Limpa o padrão X/Y da descrição para exibição
-        const cleanDesc = t.description.replace(/\s*\d{1,2}\/\d{1,2}\s*$/, '').trim()
 
         return {
           ...t,
-          cleanDesc,
           installInfo,
           targetMes,
           isInstallment: !!installInfo
@@ -530,9 +527,7 @@ function ImportarJSON({ mes, toast }) {
       })
 
       setParsed(enriched)
-      const sel={}
-      enriched.forEach((_,i)=>sel[i]=true)
-      setSelected(sel)
+      const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
 
@@ -541,77 +536,47 @@ function ImportarJSON({ mes, toast }) {
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
     setLoading(true)
 
-    // Monta linhas de transactions — todas com month_ref = targetMes (mês da fatura)
     const txnRows=toImport.map(t=>({
-      date: t.date,
-      description: t.description,
-      type: 'cartao',
-      category: t.category||'Outros',
-      member: t.member||'',
-      card: selectedCardName,
-      installments: t.installInfo ? t.installInfo.total : 1,
-      amount: t.amount,
-      notes: t.notes||'',
-      month_ref: t.targetMes   // sempre o mês da fatura
+      date:t.date,
+      description:t.description,
+      type:'cartao',
+      category:t.category||'Outros',
+      member:t.member||'',
+      card:selectedCardName,
+      installments:t.installInfo?t.installInfo.total:1,
+      amount:t.amount,
+      notes:t.notes||'',
+      month_ref:t.targetMes
     }))
 
     const {data:inserted,error}=await supabase.from('transactions').insert(txnRows).select()
     if(error){toast('Erro: '+error.message,'error');setLoading(false);return}
 
-    // Para cada parcelado: registra a parcela atual + cria todas as futuras
+    // Registrar parcelas na tabela installments
     const installRows=[]
     toImport.forEach((t,i)=>{
       if(t.installInfo&&inserted[i]){
-        const groupId=crypto.randomUUID()
-        const { current, total } = t.installInfo
-        const installAmt = t.amount                  // valor já é da parcela
-        const totalAmt   = installAmt * total        // valor total da compra
-        const remaining  = total - current           // parcelas que ainda faltam
-
-        // Parcela atual — lançada no mês da fatura
         installRows.push({
-          group_id: groupId,
-          description: t.cleanDesc || t.description,
-          total_amount: totalAmt,
-          installment_amount: installAmt,
-          total_installments: total,
-          current_installment: current,
-          card: selectedCardName,
-          category: t.category||'Outros',
-          member: t.member||'',
-          month_ref: t.targetMes,
-          transaction_id: inserted[i].id
+          group_id:crypto.randomUUID(),
+          description:t.description.replace(/\s*\d{1,2}\/\d{1,2}\s*$/,'').trim(),
+          total_amount:t.amount*t.installInfo.total,
+          installment_amount:t.amount,
+          total_installments:t.installInfo.total,
+          current_installment:t.installInfo.current,
+          card:selectedCardName,
+          category:t.category||'Outros',
+          member:t.member||'',
+          month_ref:t.targetMes,
+          transaction_id:inserted[i].id
         })
-
-        // Parcelas FUTURAS — criadas nos meses seguintes ao mês da fatura
-        for(let f=1; f<=remaining; f++){
-          const futureMes = addMonths(t.targetMes, f)
-          installRows.push({
-            group_id: groupId,
-            description: t.cleanDesc || t.description,
-            total_amount: totalAmt,
-            installment_amount: installAmt,
-            total_installments: total,
-            current_installment: current + f,
-            card: selectedCardName,
-            category: t.category||'Outros',
-            member: t.member||'',
-            month_ref: futureMes,
-            transaction_id: null
-          })
-        }
       }
     })
-
     if(installRows.length>0){
       await supabase.from('installments').insert(installRows)
     }
 
-    const nParcelados=toImport.filter(t=>t.isInstallment).length
-    const nFuturos=installRows.filter(r=>r.transaction_id===null).length
-
     setLoading(false)
-    toast(`${toImport.length} lançamentos importados!${nParcelados>0?` (${nParcelados} parcelados · ${nFuturos} parcelas futuras criadas)`:''}`, 'success')
+    toast(`${toImport.length} lançamentos importados! (${installRows.length} parcelados detectados)`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
 
@@ -645,14 +610,9 @@ function ImportarJSON({ mes, toast }) {
           </div>
         </div>
 
-        {!useAutoMonth&&(
+        {cardInfo?.closing_day&&(
           <div style={{background:'var(--green-pale)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--green)',marginBottom:12}}>
-            📅 Todos os lançamentos serão importados para <strong>{fmtM(manualMonth)}</strong>. Parcelas futuras serão criadas automaticamente nos meses seguintes.
-          </div>
-        )}
-        {useAutoMonth&&cardInfo?.closing_day&&(
-          <div style={{background:'var(--green-pale)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--green)',marginBottom:12}}>
-            📅 Fechamento dia <strong>{cardInfo.closing_day}</strong> · O mês será calculado automaticamente por data de compra
+            📅 Fechamento dia <strong>{cardInfo.closing_day}</strong> · Vencimento dia <strong>{cardInfo.due_day}</strong> · O mês será calculado automaticamente por data de compra
           </div>
         )}
 
@@ -671,7 +631,7 @@ function ImportarJSON({ mes, toast }) {
           </div>
           {nParcelados>0&&(
             <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:10}}>
-              💳 {nParcelados} parcelado(s) detectado(s) — lançados em <strong>{fmtM(manualMonth)}</strong> + parcelas futuras criadas automaticamente.
+              💳 {nParcelados} lançamento(s) parcelado(s) detectado(s) — serão registrados no painel de parcelas futuras.
             </div>
           )}
           <label style={{fontSize:13,display:'flex',alignItems:'center',gap:6,cursor:'pointer',marginBottom:10}}>
@@ -711,6 +671,7 @@ function Parcelas({ mes, setMes }) {
 
   const load=useCallback(async()=>{
     setLoading(true)
+    // Carregar parcelas dos próximos 12 meses a partir do mês atual
     const meses=[]
     const [y,m]=mes.split('-').map(Number)
     for(let i=0;i<12;i++){
@@ -722,12 +683,14 @@ function Parcelas({ mes, setMes }) {
   },[mes])
   useEffect(()=>{ load() },[load])
 
+  // Agrupar por mês
   const byMes={}
   parcelas.forEach(p=>{
     if(!byMes[p.month_ref]) byMes[p.month_ref]=[]
     byMes[p.month_ref].push(p)
   })
 
+  // Agrupar por group_id para ver o total de cada compra
   const groups={}
   parcelas.forEach(p=>{
     if(!groups[p.group_id]) groups[p.group_id]={desc:p.description,total:p.total_amount,installAmt:p.installment_amount,totalInst:p.total_installments,cat:p.category,card:p.card,meses:[]}
@@ -742,6 +705,7 @@ function Parcelas({ mes, setMes }) {
         parcelas.length===0
           ?<div className="empty-state"><div className="icon">✅</div><h3>Nenhuma parcela futura</h3><p>Suas compras parceladas aparecerão aqui.</p></div>
           :<div>
+            {/* Resumo geral */}
             <div className="section" style={{paddingTop:16}}>
               <div className="section-title">Resumo de compromissos</div>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
@@ -762,6 +726,7 @@ function Parcelas({ mes, setMes }) {
               </div>
             </div>
 
+            {/* Detalhe por mês */}
             <div className="section">
               <div className="section-title">Detalhe por mês</div>
               {Object.entries(byMes).sort(([a],[b])=>a.localeCompare(b)).map(([mesRef,items])=>{
@@ -1059,6 +1024,7 @@ function Configuracoes({ toast }) {
     <div>
       <div className="page-header"><h1>Configurações</h1></div>
       <div style={{padding:'16px 0'}}>
+
         <ConfigSection title="👨‍👩‍👧 Membros da família">
           {members.map(m=><ConfigRow key={m.id} name={m.name} onDel={()=>delMbr(m.id)}/>)}
           <div style={{display:'flex',gap:8,marginTop:12}}>
@@ -1166,6 +1132,7 @@ function Sidebar({ tab, setTab, sair }) {
   )
 }
 
+
 const SENHA_APP = 'maciel2026'
 
 function Login({ onLogin }) {
@@ -1193,6 +1160,7 @@ function Login({ onLogin }) {
 
 // ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
 export default function App() {
+  // ── Todos os hooks primeiro — antes de qualquer return ──
   const [tab,setTab]=useState('dashboard')
   const [mes,setMes]=useState(todayYM)
   const [toastData,setToastData]=useState(null)
@@ -1213,9 +1181,11 @@ export default function App() {
   },[])
   useEffect(()=>{ if(authed) reloadGlobal() },[reloadGlobal,authed])
 
+  // ── Funções ──
   const sair=()=>{ localStorage.removeItem('fm_auth'); setAuthed(false) }
   const toast=(msg,type='success')=>setToastData({msg,type})
 
+  // ── Guard de autenticação — depois de todos os hooks ──
   if(!authed) return <Login onLogin={()=>setAuthed(true)}/>
 
   const mobileTabs=[
