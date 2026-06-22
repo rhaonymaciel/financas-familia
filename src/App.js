@@ -99,33 +99,59 @@ function ConfigRow({ name, onDel, extra }) {
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
+function PizzaChart({ data, colors, total }) {
+  const size = 180
+  const cx = size/2, cy = size/2, r = 75, innerR = 38
+  let cumAngle = -Math.PI/2
+  const slices = data.map((d,i) => {
+    const pct = d.value/total
+    const startAngle = cumAngle
+    cumAngle += pct*2*Math.PI
+    const endAngle = cumAngle
+    const x1=cx+r*Math.cos(startAngle), y1=cy+r*Math.sin(startAngle)
+    const x2=cx+r*Math.cos(endAngle), y2=cy+r*Math.sin(endAngle)
+    const xi1=cx+innerR*Math.cos(startAngle), yi1=cy+innerR*Math.sin(startAngle)
+    const xi2=cx+innerR*Math.cos(endAngle), yi2=cy+innerR*Math.sin(endAngle)
+    const large = pct > 0.5 ? 1 : 0
+    const path = `M ${xi1} ${yi1} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${xi2} ${yi2} A ${innerR} ${innerR} 0 ${large} 0 ${xi1} ${yi1} Z`
+    return { ...d, path, pct, color: colors[i%colors.length] }
+  })
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+      <svg width={size} height={size} style={{flexShrink:0}}>
+        {slices.map((s,i)=><path key={i} d={s.path} fill={s.color} stroke="var(--white)" strokeWidth="2"/>)}
+        <text x={cx} y={cy-6} textAnchor="middle" fontSize="11" fill="var(--gray-500)">Total</text>
+        <text x={cx} y={cy+10} textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--gray-900)">{Number(total).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</text>
+      </svg>
+      <div style={{flex:1,minWidth:140}}>
+        {slices.map((s,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}>
+            <div style={{width:10,height:10,borderRadius:2,background:s.color,flexShrink:0}}/>
+            <div style={{flex:1,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.label}</div>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--gray-700)',whiteSpace:'nowrap'}}>{(s.pct*100).toFixed(1)}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function Dashboard({ mes, setMes }) {
   const [txns,setTxns]=useState([])
   const [loading,setLoading]=useState(true)
-  const [parcelas,setParcelas]=useState([])
+  const [futureParcelas,setFutureParcelas]=useState([])
+  const [chartType,setChartType]=useState('barras') // 'barras' ou 'pizza'
   const desktop=useDesktop()
 
   const load=useCallback(async()=>{
     setLoading(true)
-    const [{data:t},{data:p}]=await Promise.all([
+    const [{data:t}]=await Promise.all([
       supabase.from('transactions').select('*').eq('month_ref',mes).order('date',{ascending:false}),
-      supabase.from('installments').select('*').eq('month_ref',mes).order('current_installment')
     ])
-    setTxns(t||[]); setParcelas(p||[]); setLoading(false)
+    setTxns(t||[]); setLoading(false)
   },[mes])
   useEffect(()=>{ load() },[load])
 
-  const receitas=txns.filter(t=>t.type==='receita').reduce((s,t)=>s+Number(t.amount),0)
-  const despesas=txns.filter(t=>t.type!=='receita').reduce((s,t)=>s+Number(t.amount),0)
-  const saldo=receitas-despesas
-  const cartao=txns.filter(t=>t.type==='cartao').reduce((s,t)=>s+Number(t.amount),0)
-  const byCat={};txns.filter(t=>t.type!=='receita').forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+Number(t.amount)})
-  const catEntries=Object.entries(byCat).sort((a,b)=>b[1]-a[1])
-  const maxCat=catEntries[0]?.[1]||1
-  const byMember={};txns.filter(t=>t.type!=='receita').forEach(t=>{const k=t.member||'Família';byMember[k]=(byMember[k]||0)+Number(t.amount)})
-
-  // Parcelas dos próximos 3 meses
-  const [futureParcelas,setFutureParcelas]=useState([])
   useEffect(()=>{
     const loadFuture=async()=>{
       const meses=[]
@@ -139,6 +165,30 @@ function Dashboard({ mes, setMes }) {
     }
     loadFuture()
   },[mes])
+
+  const receitas=txns.filter(t=>t.type==='receita').reduce((s,t)=>s+Number(t.amount),0)
+  const despesas=txns.filter(t=>t.type!=='receita').reduce((s,t)=>s+Number(t.amount),0)
+  const saldo=receitas-despesas
+  const cartao=txns.filter(t=>t.type==='cartao').reduce((s,t)=>s+Number(t.amount),0)
+
+  const byCat={};txns.filter(t=>t.type!=='receita').forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+Number(t.amount)})
+  const catEntries=Object.entries(byCat).sort((a,b)=>b[1]-a[1])
+  const maxCat=catEntries[0]?.[1]||1
+  const catPizzaData=catEntries.slice(0,8).map(([label,value])=>({label,value}))
+
+  const byMember={};txns.filter(t=>t.type!=='receita').forEach(t=>{const k=t.member||'Família';byMember[k]=(byMember[k]||0)+Number(t.amount)})
+  const memberEntries=Object.entries(byMember).sort((a,b)=>b[1]-a[1])
+  const memberPizzaData=memberEntries.map(([label,value])=>({label,value}))
+
+  const ChartToggle=()=>(
+    <div style={{display:'flex',gap:4,background:'var(--gray-100)',borderRadius:20,padding:3}}>
+      {['barras','pizza'].map(tipo=>(
+        <button key={tipo} onClick={()=>setChartType(tipo)} style={{padding:'4px 12px',borderRadius:20,border:'none',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'var(--font-body)',background:chartType===tipo?'var(--white)':'transparent',color:chartType===tipo?'var(--gray-900)':'var(--gray-500)',boxShadow:chartType===tipo?'var(--shadow-sm)':'none',transition:'all .2s'}}>
+          {tipo==='barras'?'📊 Barras':'🥧 Pizza'}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div>
@@ -155,7 +205,6 @@ function Dashboard({ mes, setMes }) {
           <div className="metric-card amber"><div className="label">Cartão</div><div className="value">{fmt(cartao)}</div><div className="sub">{txns.filter(t=>t.type==='cartao').length} lançamentos</div></div>
         </div>
 
-        {/* Parcelas futuras */}
         {futureParcelas.length>0&&(
           <div className="section">
             <div className="section-title">⏳ Parcelas nos próximos meses</div>
@@ -186,36 +235,50 @@ function Dashboard({ mes, setMes }) {
           </div>
         )}
 
-        <div className={desktop?'desktop-grid':'section'} style={!desktop?{paddingTop:0}:{}}>
-          {catEntries.length>0&&(
-            <div>
-              <div className="section-title" style={desktop?{paddingTop:0}:{}}>Por categoria</div>
-              <div className="chart-card">
-                {catEntries.slice(0,8).map(([cat,val],i)=>(
-                  <div className="cat-bar-row" key={cat}>
-                    <div className="cat-bar-name">{cat}</div>
-                    <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/maxCat*100).toFixed(1)}%`,background:CAT_COLORS[i%CAT_COLORS.length]}}/></div>
-                    <div className="cat-bar-val">{fmt(val)}</div>
-                  </div>
-                ))}
-              </div>
+        {(catEntries.length>0||memberEntries.length>0)&&(
+          <div className="section">
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <div className="section-title" style={{margin:0}}>Distribuição de despesas</div>
+              <ChartToggle/>
             </div>
-          )}
-          {Object.keys(byMember).length>0&&(
-            <div>
-              <div className="section-title" style={desktop?{paddingTop:0}:{}}>Por membro</div>
-              <div className="chart-card">
-                {Object.entries(byMember).sort((a,b)=>b[1]-a[1]).map(([mbr,val],i)=>(
-                  <div className="cat-bar-row" key={mbr}>
-                    <div className="cat-bar-name">{mbr}</div>
-                    <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
-                    <div className="cat-bar-val">{fmt(val)}</div>
+            <div className={desktop?'desktop-grid':''}>
+              {catEntries.length>0&&(
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:10}}>Por categoria</div>
+                  <div className="chart-card">
+                    {chartType==='barras'
+                      ? catEntries.slice(0,8).map(([cat,val],i)=>(
+                          <div className="cat-bar-row" key={cat}>
+                            <div className="cat-bar-name">{cat}</div>
+                            <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/maxCat*100).toFixed(1)}%`,background:CAT_COLORS[i%CAT_COLORS.length]}}/></div>
+                            <div className="cat-bar-val">{fmt(val)}</div>
+                          </div>
+                        ))
+                      : <PizzaChart data={catPizzaData} colors={CAT_COLORS} total={despesas}/>
+                    }
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+              {memberEntries.length>0&&(
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:10}}>Por membro</div>
+                  <div className="chart-card">
+                    {chartType==='barras'
+                      ? memberEntries.map(([mbr,val],i)=>(
+                          <div className="cat-bar-row" key={mbr}>
+                            <div className="cat-bar-name">{mbr}</div>
+                            <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
+                            <div className="cat-bar-val">{fmt(val)}</div>
+                          </div>
+                        ))
+                      : <PizzaChart data={memberPizzaData} colors={CAT_COLORS.slice(4)} total={despesas}/>
+                    }
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="section">
           <div className="section-title">Últimos lançamentos</div>
