@@ -558,45 +558,46 @@ function ImportarJSON({ mes, toast }) {
     const {data:inserted,error}=await supabase.from('transactions').insert(txnRows).select()
     if(error){toast('Erro: '+error.message,'error');setLoading(false);return}
 
-    // Para cada parcelado: cria registros de parcelas FUTURAS (a partir da próxima)
-    // A parcela atual já está lançada como transação acima no mês da fatura
+    // Para cada parcelado: registra a parcela atual + cria todas as futuras
     const installRows=[]
     toImport.forEach((t,i)=>{
       if(t.installInfo&&inserted[i]){
         const groupId=crypto.randomUUID()
         const { current, total } = t.installInfo
-        const remaining = total - current  // quantas parcelas ainda faltam após a atual
+        const installAmt = t.amount                  // valor já é da parcela
+        const totalAmt   = installAmt * total        // valor total da compra
+        const remaining  = total - current           // parcelas que ainda faltam
 
-        // Registra a parcela atual na tabela installments (para aparecer no painel)
+        // Parcela atual — lançada no mês da fatura
         installRows.push({
           group_id: groupId,
           description: t.cleanDesc || t.description,
-          total_amount: t.amount * total,
-          installment_amount: t.amount,
+          total_amount: totalAmt,
+          installment_amount: installAmt,
           total_installments: total,
           current_installment: current,
           card: selectedCardName,
           category: t.category||'Outros',
           member: t.member||'',
-          month_ref: t.targetMes,   // mês da fatura (parcela atual)
+          month_ref: t.targetMes,
           transaction_id: inserted[i].id
         })
 
-        // Cria as parcelas FUTURAS nos meses seguintes
+        // Parcelas FUTURAS — criadas nos meses seguintes ao mês da fatura
         for(let f=1; f<=remaining; f++){
           const futureMes = addMonths(t.targetMes, f)
           installRows.push({
             group_id: groupId,
             description: t.cleanDesc || t.description,
-            total_amount: t.amount * total,
-            installment_amount: t.amount,
+            total_amount: totalAmt,
+            installment_amount: installAmt,
             total_installments: total,
             current_installment: current + f,
             card: selectedCardName,
             category: t.category||'Outros',
             member: t.member||'',
             month_ref: futureMes,
-            transaction_id: null   // parcelas futuras não têm transação ainda
+            transaction_id: null
           })
         }
       }
