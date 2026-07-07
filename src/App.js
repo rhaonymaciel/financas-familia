@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, createContext, useContext } from 'react'
+import React, { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react'
 import { supabase } from './supabase'
 import './index.css'
 
@@ -308,6 +308,7 @@ function Lancamentos({ mes, setMes, toast }) {
   const [loading,setLoading]=useState(true)
   const [filterTipo,setFilter]=useState('todos')
   const [editTxn,setEditTxn]=useState(null)
+  const scrollRef=useRef(null)
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -319,12 +320,27 @@ function Lancamentos({ mes, setMes, toast }) {
   const del=async id=>{
     if(!window.confirm('Remover?'))return
     await supabase.from('transactions').delete().eq('id',id)
-    toast('Removido','success'); load()
+    // Remover só o item da lista sem recarregar tudo
+    setTxns(prev=>prev.filter(t=>t.id!==id))
+    toast('Removido','success')
   }
+
   const saveEdit=async()=>{
     const {id,...rest}=editTxn
-    await supabase.from('transactions').update({description:rest.description,amount:parseFloat(rest.amount),category:rest.category,member:rest.member,type:rest.type,date:rest.date,notes:rest.notes}).eq('id',id)
-    toast('Atualizado!','success'); setEditTxn(null); load()
+    const {error}=await supabase.from('transactions').update({
+      description:rest.description,
+      amount:parseFloat(rest.amount),
+      category:rest.category,
+      member:rest.member,
+      type:rest.type,
+      date:rest.date,
+      notes:rest.notes
+    }).eq('id',id)
+    if(error){toast('Erro: '+error.message,'error');return}
+    // Atualizar só o item alterado na lista sem recarregar tudo
+    setTxns(prev=>prev.map(t=>t.id===id?{...t,...rest,amount:parseFloat(rest.amount)}:t))
+    toast('Atualizado!','success')
+    setEditTxn(null)
   }
 
   const filtered=filterTipo==='todos'?txns:txns.filter(t=>t.type===filterTipo)
@@ -343,7 +359,7 @@ function Lancamentos({ mes, setMes, toast }) {
         ))}
       </div>
       {loading?<div className="loading"><div className="spinner"/></div>:(
-        <div className="section" style={{paddingTop:12}}>
+        <div className="section" style={{paddingTop:12}} ref={scrollRef}>
           {filtered.length===0
             ?<div className="empty-state"><div className="icon">📭</div><h3>Sem lançamentos</h3></div>
             :<>
@@ -351,43 +367,69 @@ function Lancamentos({ mes, setMes, toast }) {
                 <span style={{fontSize:12,color:'var(--gray-500)'}}>{filtered.length} lançamentos</span>
                 <span style={{fontSize:13,fontWeight:700,color:total>=0?'var(--green)':'var(--red)'}}>{total>=0?'+':''}{fmt(total)}</span>
               </div>
-              <div className="txn-list">{filtered.map(t=>(
-                <div className="txn-item" key={t.id}>
-                  <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
-                  <div className="txn-info" onClick={()=>setEditTxn({...t})} style={{cursor:'pointer'}}>
-                    <div className="txn-desc">{t.description}</div>
-                    <div className="txn-meta">
-                      <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
-                      {' '}{t.category} · {t.member||'—'} · {t.date?.slice(5).replace('-','/')}
-                      {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20,marginLeft:4}}>{t.installments}x</span>}
+              <div className="txn-list">
+                {filtered.map(t=>(
+                  <div className="txn-item" key={t.id}>
+                    <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+                    <div className="txn-info" onClick={()=>setEditTxn({...t})} style={{cursor:'pointer'}}>
+                      <div className="txn-desc">{t.description}</div>
+                      <div className="txn-meta">
+                        <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
+                        {' '}{t.category} · {t.member||'—'} · {t.date?.slice(5).replace('-','/')}
+                        {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20,marginLeft:4}}>{t.installments}x</span>}
+                      </div>
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+                      <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+                      <div style={{display:'flex',gap:4}}>
+                        <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>setEditTxn({...t})}>✏️</button>
+                        <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
+                      </div>
                     </div>
                   </div>
-                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
-                    <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
-                    <div style={{display:'flex',gap:4}}>
-                      <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>setEditTxn({...t})}>✏️</button>
-                      <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
-                    </div>
-                  </div>
-                </div>
-              ))}</div>
+                ))}
+              </div>
             </>
           }
         </div>
       )}
       {editTxn&&(
         <Modal title="Editar lançamento" onClose={()=>setEditTxn(null)}>
-          <div className="form-group"><label className="form-label">Descrição</label><input className="form-input" value={editTxn.description} onChange={e=>setEditTxn(v=>({...v,description:e.target.value}))}/></div>
-          <div className="form-row">
-            <div className="form-group"><label className="form-label">Valor</label><input type="number" className="form-input" value={editTxn.amount} onChange={e=>setEditTxn(v=>({...v,amount:e.target.value}))}/></div>
-            <div className="form-group"><label className="form-label">Data</label><input type="date" className="form-input" value={editTxn.date} onChange={e=>setEditTxn(v=>({...v,date:e.target.value}))}/></div>
+          <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:12,padding:'6px 10px',background:'var(--gray-50)',borderRadius:8}}>
+            ID: {editTxn.id?.slice(0,8)}... · {editTxn.date}
+          </div>
+          <div className="form-group"><label className="form-label">Descrição</label>
+            <input className="form-input" value={editTxn.description} onChange={e=>setEditTxn(v=>({...v,description:e.target.value}))}/>
           </div>
           <div className="form-row">
-            <div className="form-group"><label className="form-label">Tipo</label><select className="form-select" value={editTxn.type} onChange={e=>setEditTxn(v=>({...v,type:e.target.value}))}>{TIPOS.map(t=><option key={t} value={t}>{TIPO_LABELS[t]}</option>)}</select></div>
-            <div className="form-group"><label className="form-label">Categoria</label><select className="form-select" value={editTxn.category} onChange={e=>setEditTxn(v=>({...v,category:e.target.value}))}>{catsByType(editTxn.type).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Valor</label>
+              <input type="number" className="form-input" value={editTxn.amount} onChange={e=>setEditTxn(v=>({...v,amount:e.target.value}))}/>
+            </div>
+            <div className="form-group"><label className="form-label">Data</label>
+              <input type="date" className="form-input" value={editTxn.date} onChange={e=>setEditTxn(v=>({...v,date:e.target.value}))}/>
+            </div>
           </div>
-          <div className="form-group"><label className="form-label">Membro</label><select className="form-select" value={editTxn.member||''} onChange={e=>setEditTxn(v=>({...v,member:e.target.value}))}><option value="">—</option>{members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}</select></div>
-          <div className="form-group"><label className="form-label">Observação</label><input className="form-input" value={editTxn.notes||''} onChange={e=>setEditTxn(v=>({...v,notes:e.target.value}))}/></div>
+          <div className="form-row">
+            <div className="form-group"><label className="form-label">Tipo</label>
+              <select className="form-select" value={editTxn.type} onChange={e=>setEditTxn(v=>({...v,type:e.target.value}))}>
+                {TIPOS.map(t=><option key={t} value={t}>{TIPO_LABELS[t]}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label className="form-label">Categoria</label>
+              <select className="form-select" value={editTxn.category} onChange={e=>setEditTxn(v=>({...v,category:e.target.value}))}>
+                {catsByType(editTxn.type).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-group"><label className="form-label">Membro</label>
+            <select className="form-select" value={editTxn.member||''} onChange={e=>setEditTxn(v=>({...v,member:e.target.value}))}>
+              <option value="">—</option>
+              {members.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Observação</label>
+            <input className="form-input" value={editTxn.notes||''} onChange={e=>setEditTxn(v=>({...v,notes:e.target.value}))}/>
+          </div>
           <button className="btn-primary" onClick={saveEdit}>✓ Salvar alterações</button>
         </Modal>
       )}
