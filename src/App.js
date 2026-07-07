@@ -317,28 +317,47 @@ function Lancamentos({ mes, setMes, toast }) {
   },[mes])
   useEffect(()=>{ load() },[load])
 
+  const scrollPos=useRef(0)
+
   const del=async id=>{
     if(!window.confirm('Remover?'))return
     await supabase.from('transactions').delete().eq('id',id)
-    // Remover só o item da lista sem recarregar tudo
     setTxns(prev=>prev.filter(t=>t.id!==id))
     toast('Removido','success')
   }
 
+  const openEdit=(t)=>{
+    // Salvar posição do scroll antes de abrir modal
+    const el=document.querySelector('.page-content')
+    if(el) scrollPos.current=el.scrollTop
+    setEditTxn({...t})
+  }
+
+  const closeEdit=()=>{
+    setEditTxn(null)
+    // Restaurar posição do scroll após fechar modal
+    setTimeout(()=>{
+      const el=document.querySelector('.page-content')
+      if(el) el.scrollTop=scrollPos.current
+    },50)
+  }
+
   const saveEdit=async()=>{
-    const {id,...rest}=editTxn
-    const {error}=await supabase.from('transactions').update({
-      description:rest.description,
-      amount:parseFloat(rest.amount),
-      category:rest.category,
-      member:rest.member,
-      type:rest.type,
-      date:rest.date,
-      notes:rest.notes
-    }).eq('id',id)
+    // Usar o id original para garantir que editamos o item certo
+    const targetId=editTxn.id
+    const updates={
+      description:editTxn.description,
+      amount:parseFloat(editTxn.amount),
+      category:editTxn.category,
+      member:editTxn.member||'',
+      type:editTxn.type,
+      date:editTxn.date,
+      notes:editTxn.notes||''
+    }
+    const {error}=await supabase.from('transactions').update(updates).eq('id',targetId)
     if(error){toast('Erro: '+error.message,'error');return}
-    // Atualizar só o item alterado na lista sem recarregar tudo
-    setTxns(prev=>prev.map(t=>t.id===id?{...t,...rest,amount:parseFloat(rest.amount)}:t))
+    // Atualizar SOMENTE o item com esse id exato
+    setTxns(prev=>prev.map(t=>t.id===targetId?{...t,...updates}:t))
     toast('Atualizado!','success')
     setEditTxn(null)
   }
@@ -371,7 +390,7 @@ function Lancamentos({ mes, setMes, toast }) {
                 {filtered.map(t=>(
                   <div className="txn-item" key={t.id}>
                     <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
-                    <div className="txn-info" onClick={()=>setEditTxn({...t})} style={{cursor:'pointer'}}>
+                    <div className="txn-info" onClick={()=>openEdit(t)} style={{cursor:'pointer'}}>
                       <div className="txn-desc">{t.description}</div>
                       <div className="txn-meta">
                         <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
@@ -382,7 +401,7 @@ function Lancamentos({ mes, setMes, toast }) {
                     <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
                       <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
                       <div style={{display:'flex',gap:4}}>
-                        <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>setEditTxn({...t})}>✏️</button>
+                        <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>openEdit(t)}>✏️</button>
                         <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
                       </div>
                     </div>
@@ -394,7 +413,7 @@ function Lancamentos({ mes, setMes, toast }) {
         </div>
       )}
       {editTxn&&(
-        <Modal title="Editar lançamento" onClose={()=>setEditTxn(null)}>
+        <Modal title={`Editar: ${editTxn.description?.slice(0,30)}`} onClose={closeEdit}>
           <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:12,padding:'6px 10px',background:'var(--gray-50)',borderRadius:8}}>
             ID: {editTxn.id?.slice(0,8)}... · {editTxn.date}
           </div>
