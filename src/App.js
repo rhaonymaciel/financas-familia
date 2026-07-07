@@ -307,8 +307,9 @@ function Lancamentos({ mes, setMes, toast }) {
   const [txns,setTxns]=useState([])
   const [loading,setLoading]=useState(true)
   const [filterTipo,setFilter]=useState('todos')
+  const [filterCat,setFilterCat]=useState('todas')
   const [editTxn,setEditTxn]=useState(null)
-  const scrollRef=useRef(null)
+  const scrollPos=useRef(0)
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -316,8 +317,6 @@ function Lancamentos({ mes, setMes, toast }) {
     setTxns(data||[]); setLoading(false)
   },[mes])
   useEffect(()=>{ load() },[load])
-
-  const scrollPos=useRef(0)
 
   const del=async id=>{
     if(!window.confirm('Remover?'))return
@@ -327,7 +326,6 @@ function Lancamentos({ mes, setMes, toast }) {
   }
 
   const openEdit=(t)=>{
-    // Salvar posição do scroll antes de abrir modal
     const el=document.querySelector('.page-content')
     if(el) scrollPos.current=el.scrollTop
     setEditTxn({...t})
@@ -335,7 +333,6 @@ function Lancamentos({ mes, setMes, toast }) {
 
   const closeEdit=()=>{
     setEditTxn(null)
-    // Restaurar posição do scroll após fechar modal
     setTimeout(()=>{
       const el=document.querySelector('.page-content')
       if(el) el.scrollTop=scrollPos.current
@@ -343,7 +340,6 @@ function Lancamentos({ mes, setMes, toast }) {
   }
 
   const saveEdit=async()=>{
-    // Usar o id original para garantir que editamos o item certo
     const targetId=editTxn.id
     const updates={
       description:editTxn.description,
@@ -356,20 +352,31 @@ function Lancamentos({ mes, setMes, toast }) {
     }
     const {error}=await supabase.from('transactions').update(updates).eq('id',targetId)
     if(error){toast('Erro: '+error.message,'error');return}
-    // Atualizar SOMENTE o item com esse id exato
     setTxns(prev=>prev.map(t=>t.id===targetId?{...t,...updates}:t))
     toast('Atualizado!','success')
-    setEditTxn(null)
+    closeEdit()
   }
 
-  const filtered=filterTipo==='todos'?txns:txns.filter(t=>t.type===filterTipo)
+  // Filtrar por tipo e categoria
+  const filtered=txns
+    .filter(t=>filterTipo==='todos'||t.type===filterTipo)
+    .filter(t=>filterCat==='todas'||t.category===filterCat)
+
   const total=filtered.reduce((s,t)=>t.type==='receita'?s+Number(t.amount):s-Number(t.amount),0)
   const catsByType=tipo=>categories.filter(c=>tipo==='receita'?c.type==='receita':c.type==='despesa').map(c=>c.name)
+
+  // Categorias que existem nos lançamentos do mês
+  const catsNoMes=[...new Set(txns.map(t=>t.category))].filter(Boolean).sort()
+
+  // Formatar data como DD/MM
+  const fmtDate=d=>{ if(!d) return ''; const [,m,day]=d.split('-'); return `${day}/${m}` }
 
   return (
     <div>
       <div className="page-header"><h1>Extrato</h1></div>
       <MonthNav mes={mes} setMes={setMes}/>
+
+      {/* Filtro por tipo */}
       <div style={{padding:'10px 16px 4px',display:'flex',gap:6,overflowX:'auto'}}>
         {['todos',...TIPOS].map(t=>(
           <button key={t} onClick={()=>setFilter(t)} style={{padding:'6px 12px',borderRadius:20,border:'none',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'var(--font-body)',background:filterTipo===t?'var(--gray-900)':'var(--white)',color:filterTipo===t?'var(--white)':'var(--gray-500)'}}>
@@ -377,13 +384,26 @@ function Lancamentos({ mes, setMes, toast }) {
           </button>
         ))}
       </div>
+
+      {/* Filtro por categoria */}
+      <div style={{padding:'4px 16px 8px',display:'flex',gap:6,overflowX:'auto'}}>
+        <button onClick={()=>setFilterCat('todas')} style={{padding:'5px 11px',borderRadius:20,border:'1.5px solid',fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'var(--font-body)',background:filterCat==='todas'?'var(--green)':'transparent',color:filterCat==='todas'?'var(--white)':'var(--green)',borderColor:'var(--green)'}}>
+          Todas categorias
+        </button>
+        {catsNoMes.map(c=>(
+          <button key={c} onClick={()=>setFilterCat(c===filterCat?'todas':c)} style={{padding:'5px 11px',borderRadius:20,border:'1.5px solid',fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'var(--font-body)',background:filterCat===c?'var(--green)':'transparent',color:filterCat===c?'var(--white)':'var(--gray-500)',borderColor:filterCat===c?'var(--green)':'var(--gray-300)'}}>
+            {c}
+          </button>
+        ))}
+      </div>
+
       {loading?<div className="loading"><div className="spinner"/></div>:(
-        <div className="section" style={{paddingTop:12}} ref={scrollRef}>
+        <div className="section" style={{paddingTop:8}}>
           {filtered.length===0
-            ?<div className="empty-state"><div className="icon">📭</div><h3>Sem lançamentos</h3></div>
+            ?<div className="empty-state"><div className="icon">📭</div><h3>Sem lançamentos</h3><p>{filterCat!=='todas'?`Nenhum gasto em "${filterCat}" neste mês`:'Nenhum lançamento encontrado'}</p></div>
             :<>
-              <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
-                <span style={{fontSize:12,color:'var(--gray-500)'}}>{filtered.length} lançamentos</span>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:10,alignItems:'center'}}>
+                <span style={{fontSize:12,color:'var(--gray-500)'}}>{filtered.length} lançamento{filtered.length>1?'s':''}{filterCat!=='todas'?` em ${filterCat}`:''}</span>
                 <span style={{fontSize:13,fontWeight:700,color:total>=0?'var(--green)':'var(--red)'}}>{total>=0?'+':''}{fmt(total)}</span>
               </div>
               <div className="txn-list">
@@ -394,8 +414,10 @@ function Lancamentos({ mes, setMes, toast }) {
                       <div className="txn-desc">{t.description}</div>
                       <div className="txn-meta">
                         <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
-                        {' '}{t.category} · {t.member||'—'} · {t.date?.slice(5).replace('-','/')}
+                        {' '}{t.category}
+                        {t.member&&<span style={{color:'var(--gray-400)'}}> · {t.member}</span>}
                         {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20,marginLeft:4}}>{t.installments}x</span>}
+                        <span style={{marginLeft:6,fontSize:11,fontWeight:600,color:'var(--blue)',background:'var(--blue-light)',padding:'1px 6px',borderRadius:10}}>{fmtDate(t.date)}</span>
                       </div>
                     </div>
                     <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
@@ -415,7 +437,7 @@ function Lancamentos({ mes, setMes, toast }) {
       {editTxn&&(
         <Modal title={`Editar: ${editTxn.description?.slice(0,30)}`} onClose={closeEdit}>
           <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:12,padding:'6px 10px',background:'var(--gray-50)',borderRadius:8}}>
-            ID: {editTxn.id?.slice(0,8)}... · {editTxn.date}
+            Data: {fmtDate(editTxn.date)} · ID: {editTxn.id?.slice(0,8)}...
           </div>
           <div className="form-group"><label className="form-label">Descrição</label>
             <input className="form-input" value={editTxn.description} onChange={e=>setEditTxn(v=>({...v,description:e.target.value}))}/>
