@@ -325,6 +325,13 @@ function Lancamentos({ mes, setMes, toast }) {
     toast('Removido','success')
   }
 
+  // Trocar categoria diretamente na linha sem abrir modal
+  const changeCategory=async(id, newCat)=>{
+    await supabase.from('transactions').update({category:newCat}).eq('id',id)
+    setTxns(prev=>prev.map(t=>t.id===id?{...t,category:newCat}:t))
+    toast(`Categoria alterada para "${newCat}"!`,'success')
+  }
+
   const openEdit=(t)=>{
     const el=document.querySelector('.page-content')
     if(el) scrollPos.current=el.scrollTop
@@ -357,18 +364,14 @@ function Lancamentos({ mes, setMes, toast }) {
     closeEdit()
   }
 
-  // Filtrar por tipo e categoria
   const filtered=txns
     .filter(t=>filterTipo==='todos'||t.type===filterTipo)
     .filter(t=>filterCat==='todas'||t.category===filterCat)
 
   const total=filtered.reduce((s,t)=>t.type==='receita'?s+Number(t.amount):s-Number(t.amount),0)
   const catsByType=tipo=>categories.filter(c=>tipo==='receita'?c.type==='receita':c.type==='despesa').map(c=>c.name)
-
-  // Categorias que existem nos lançamentos do mês
   const catsNoMes=[...new Set(txns.map(t=>t.category))].filter(Boolean).sort()
-
-  // Formatar data como DD/MM
+  const todasCats=categories.map(c=>c.name)
   const fmtDate=d=>{ if(!d) return ''; const [,m,day]=d.split('-'); return `${day}/${m}` }
 
   return (
@@ -388,7 +391,7 @@ function Lancamentos({ mes, setMes, toast }) {
       {/* Filtro por categoria */}
       <div style={{padding:'4px 16px 8px',display:'flex',gap:6,overflowX:'auto'}}>
         <button onClick={()=>setFilterCat('todas')} style={{padding:'5px 11px',borderRadius:20,border:'1.5px solid',fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'var(--font-body)',background:filterCat==='todas'?'var(--green)':'transparent',color:filterCat==='todas'?'var(--white)':'var(--green)',borderColor:'var(--green)'}}>
-          Todas categorias
+          Todas
         </button>
         {catsNoMes.map(c=>(
           <button key={c} onClick={()=>setFilterCat(c===filterCat?'todas':c)} style={{padding:'5px 11px',borderRadius:20,border:'1.5px solid',fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'var(--font-body)',background:filterCat===c?'var(--green)':'transparent',color:filterCat===c?'var(--white)':'var(--gray-500)',borderColor:filterCat===c?'var(--green)':'var(--gray-300)'}}>
@@ -410,14 +413,22 @@ function Lancamentos({ mes, setMes, toast }) {
                 {filtered.map(t=>(
                   <div className="txn-item" key={t.id}>
                     <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
-                    <div className="txn-info" onClick={()=>openEdit(t)} style={{cursor:'pointer'}}>
-                      <div className="txn-desc">{t.description}</div>
-                      <div className="txn-meta">
+                    <div className="txn-info">
+                      <div className="txn-desc" onClick={()=>openEdit(t)} style={{cursor:'pointer'}}>{t.description}</div>
+                      <div className="txn-meta" style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
                         <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
-                        {' '}{t.category}
-                        {t.member&&<span style={{color:'var(--gray-400)'}}> · {t.member}</span>}
-                        {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20,marginLeft:4}}>{t.installments}x</span>}
-                        <span style={{marginLeft:6,fontSize:11,fontWeight:600,color:'var(--blue)',background:'var(--blue-light)',padding:'1px 6px',borderRadius:10}}>{fmtDate(t.date)}</span>
+                        {/* Categoria clicável inline */}
+                        <select
+                          value={t.category||''}
+                          onChange={e=>changeCategory(t.id, e.target.value)}
+                          onClick={e=>e.stopPropagation()}
+                          style={{fontSize:11,fontWeight:600,color:'var(--gray-700)',background:'var(--gray-100)',border:'none',borderRadius:10,padding:'2px 6px',cursor:'pointer',fontFamily:'var(--font-body)',appearance:'none',WebkitAppearance:'none'}}
+                        >
+                          {todasCats.map(c=><option key={c} value={c}>{c}</option>)}
+                        </select>
+                        {t.member&&<span style={{color:'var(--gray-400)',fontSize:11}}>· {t.member}</span>}
+                        {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20}}>{t.installments}x</span>}
+                        <span style={{fontSize:11,fontWeight:600,color:'var(--blue)',background:'var(--blue-light)',padding:'1px 6px',borderRadius:10}}>{fmtDate(t.date)}</span>
                       </div>
                     </div>
                     <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
@@ -668,13 +679,14 @@ function ImportarJSON({ mes, toast }) {
     setLoading(true); setProgress('Inserindo lançamentos...')
 
     // 1. Inserir TODOS os lançamentos atuais de uma vez
+    // Usar a categoria do estado parsed (que pode ter sido editada pelo usuário no preview)
     const txnRows=toImport.map(t=>({
       date:t.date,
       description:t.description,
       type:'cartao',
-      category:t.category||'Outros',
+      category:t.category||'Outros',  // categoria já vem do parsed atualizado
       member:t.member||'',
-      card:t.card||selectedCardName,
+      card:t.card||selectedCardName,   // card do JSON tem prioridade
       installments:t.installInfo?t.installInfo.total:1,
       amount:t.amount,
       notes:t.notes||'',
