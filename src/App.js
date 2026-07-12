@@ -676,17 +676,43 @@ function ImportarJSON({ mes, toast }) {
   const importar=async()=>{
     const toImport=parsed.filter((_,i)=>selected[i])
     if(!toImport.length){toast('Selecione pelo menos um','error');return}
-    setLoading(true); setProgress('Inserindo lançamentos...')
+    setLoading(true); setProgress('Verificando duplicatas...')
 
-    // 1. Inserir TODOS os lançamentos atuais de uma vez
-    // Usar a categoria do estado parsed (que pode ter sido editada pelo usuário no preview)
-    const txnRows=toImport.map(t=>({
+    // 1. Checar lançamentos que já existem no banco para evitar duplicatas
+    // Chave de deduplicação: description + amount + month_ref
+    const mesesEnvolvidos=[...new Set(toImport.map(t=>t.targetMes))]
+    const {data:existingTxns}=await supabase
+      .from('transactions')
+      .select('description,amount,month_ref')
+      .in('month_ref', mesesEnvolvidos)
+
+    const existingTxnKeys=new Set(
+      (existingTxns||[]).map(t=>`${t.description}|${Number(t.amount).toFixed(2)}|${t.month_ref}`)
+    )
+
+    const toImportFiltered=toImport.filter(t=>{
+      const key=`${t.description}|${Number(t.amount).toFixed(2)}|${t.targetMes}`
+      return !existingTxnKeys.has(key)
+    })
+
+    const duplicados=toImport.length-toImportFiltered.length
+    if(duplicados>0) setProgress(`${duplicados} já existem — importando apenas os novos...`)
+
+    if(toImportFiltered.length===0){
+      toast(`Nenhum lançamento novo — ${duplicados} já estavam importados.`,'error')
+      setLoading(false); setProgress(''); return
+    }
+
+    setProgress('Inserindo lançamentos...')
+
+    // 2. Inserir APENAS os lançamentos novos (sem duplicatas)
+    const txnRows=toImportFiltered.map(t=>({
       date:t.date,
       description:t.description,
       type:'cartao',
-      category:t.category||'Outros',  // categoria já vem do parsed atualizado
+      category:t.category||'Outros',
       member:t.member||'',
-      card:t.card||selectedCardName,   // card do JSON tem prioridade
+      card:t.card||selectedCardName,
       installments:t.installInfo?t.installInfo.total:1,
       amount:t.amount,
       notes:t.notes||'',
@@ -702,7 +728,7 @@ function ImportarJSON({ mes, toast }) {
     const allFutureTxns=[]
     const allInstallRows=[]
 
-    toImport.forEach((t,idx)=>{
+    toImportFiltered.forEach((t,idx)=>{
       if(!t.installInfo) return
       const groupId=crypto.randomUUID()
       const descBase=t.description.replace(/\s*\d{1,2}\/\d{1,2}$/, '').trim()
@@ -811,7 +837,8 @@ function ImportarJSON({ mes, toast }) {
 
     setLoading(false); setProgress('')
     const nFuturas=futureInserted.length
-    toast(`${inserted.length} lançamentos + ${nFuturas} parcelas futuras importados!`,'success')
+    const msgDup=duplicados>0?` (${duplicados} já existiam, ignorados)`:''
+    toast(`${inserted.length} lançamentos + ${nFuturas} parcelas futuras importados!${msgDup}`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
 
