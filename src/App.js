@@ -1372,7 +1372,7 @@ function Sidebar({ tab, setTab, sair }) {
 }
 
 
-const SENHA_APP = 'maciel2026'
+const SENHA_APP = process.env.REACT_APP_SENHA || 'maciel2026'
 
 function Login({ onLogin }) {
   const [senha, setSenha] = useState('')
