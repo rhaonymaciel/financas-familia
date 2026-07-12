@@ -1241,6 +1241,158 @@ function Recorrentes({ mes, toast }) {
 }
 
 // ── CONFIGURAÇÕES ─────────────────────────────────────────────────────────────
+function ConfigSectionDados({ toast }) {
+  const [mesSel, setMesSel] = useState(todayYM)
+  const [preview, setPreview] = useState(null)   // null | []
+  const [loading, setLoading] = useState(false)
+
+  const buscar = async () => {
+    setLoading(true)
+    const { data } = await supabase
+      .from('transactions')
+      .select('id,description,amount,type,date,category,member')
+      .eq('month_ref', mesSel)
+      .order('date', { ascending: false })
+    setPreview(data || [])
+    setLoading(false)
+  }
+
+  const excluirMes = async () => {
+    if (!preview || preview.length === 0) return
+    if (!window.confirm(`Apagar ${preview.length} lançamento(s) de ${fmtM(mesSel)}? Esta ação não pode ser desfeita.`)) return
+    setLoading(true)
+    const ids = preview.map(t => t.id)
+    // Remove em lotes de 100 para não estourar limite de URL
+    for (let i = 0; i < ids.length; i += 100) {
+      await supabase.from('installments').delete().in('transaction_id', ids.slice(i, i + 100))
+      await supabase.from('transactions').delete().in('id', ids.slice(i, i + 100))
+    }
+    toast(`${preview.length} lançamento(s) de ${fmtM(mesSel)} removidos!`, 'success')
+    setPreview(null)
+    setLoading(false)
+  }
+
+  const excluirSoAvulsos = async () => {
+    if (!preview || preview.length === 0) return
+    // Avulsos = type !== 'cartao' OU type === 'cartao' mas installments = 1
+    // Mais simples: exclui os que não têm barra na descrição (não são parcelas)
+    const avulsos = preview.filter(t => {
+      const match = t.description.match(/\d{1,2}\/\d{1,2}/)
+      return !match
+    })
+    if (avulsos.length === 0) { toast('Nenhum lançamento avulso encontrado — todos parecem ser parcelas.', 'error'); return }
+    if (!window.confirm(`Apagar ${avulsos.length} lançamento(s) avulso(s) de ${fmtM(mesSel)}?\n\nAs parcelas (ex: "02/12") serão mantidas.`)) return
+    setLoading(true)
+    const ids = avulsos.map(t => t.id)
+    for (let i = 0; i < ids.length; i += 100) {
+      await supabase.from('installments').delete().in('transaction_id', ids.slice(i, i + 100))
+      await supabase.from('transactions').delete().in('id', ids.slice(i, i + 100))
+    }
+    toast(`${avulsos.length} lançamento(s) avulso(s) removidos de ${fmtM(mesSel)}!`, 'success')
+    setPreview(prev => prev.filter(t => t.description.match(/\d{1,2}\/\d{1,2}/)))
+    setLoading(false)
+  }
+
+  const totalPreview = preview ? preview.reduce((s, t) => s + Number(t.amount), 0) : 0
+  const avulsosCount = preview ? preview.filter(t => !t.description.match(/\d{1,2}\/\d{1,2}/)).length : 0
+  const parcelasCount = preview ? preview.length - avulsosCount : 0
+
+  return (
+    <ConfigSection title="🗑️ Dados">
+      {/* Limpar mês atual */}
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+        <button className="btn-secondary" onClick={async()=>{
+          if(!window.confirm('Limpar lançamentos do mês atual?')) return
+          const mesAtual=new Date().toISOString().slice(0,7)
+          await supabase.from('installments').delete().eq('month_ref',mesAtual)
+          await supabase.from('transactions').delete().eq('month_ref',mesAtual)
+          window.location.reload()
+        }}>🗓️ Limpar mês atual</button>
+        <button style={{padding:'10px 18px',background:'#FCEBEB',color:'#A32D2D',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,cursor:'pointer'}} onClick={async()=>{
+          if(!window.confirm('⚠️ Apagar TODOS os lançamentos? Esta ação não pode ser desfeita.')) return
+          if(!window.confirm('Tem certeza? Todos os meses serão apagados.')) return
+          await supabase.from('installments').delete().neq('id','00000000-0000-0000-0000-000000000000')
+          await supabase.from('transactions').delete().neq('id','00000000-0000-0000-0000-000000000000')
+          window.location.reload()
+        }}>🗑️ Limpar tudo</button>
+      </div>
+
+      {/* Limpar mês específico */}
+      <div style={{borderTop:'1px solid var(--gray-100)',paddingTop:14}}>
+        <div style={{fontSize:13,fontWeight:600,color:'var(--gray-700)',marginBottom:10}}>🔍 Gerenciar lançamentos por mês</div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <input
+            type="month"
+            className="form-input"
+            style={{margin:0,flex:1,minWidth:140,maxWidth:200}}
+            value={mesSel}
+            onChange={e=>{ setMesSel(e.target.value); setPreview(null) }}
+          />
+          <button className="btn-secondary" onClick={buscar} disabled={loading}>
+            {loading ? '...' : '🔍 Ver lançamentos'}
+          </button>
+        </div>
+
+        {preview !== null && (
+          <div style={{marginTop:12}}>
+            {preview.length === 0 ? (
+              <div style={{fontSize:13,color:'var(--gray-500)',padding:'10px 0'}}>
+                Nenhum lançamento em {fmtM(mesSel)}.
+              </div>
+            ) : (
+              <>
+                {/* Resumo */}
+                <div style={{background:'var(--gray-50)',borderRadius:10,padding:'10px 14px',marginBottom:10,display:'flex',gap:16,flexWrap:'wrap',fontSize:13}}>
+                  <span>📦 <strong>{preview.length}</strong> total</span>
+                  <span>🛒 <strong>{avulsosCount}</strong> avulso(s)</span>
+                  <span>💳 <strong>{parcelasCount}</strong> parcela(s)</span>
+                  <span style={{marginLeft:'auto',fontWeight:700,color:'var(--red)'}}>Total: {fmt(totalPreview)}</span>
+                </div>
+
+                {/* Lista */}
+                <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--gray-100)',borderRadius:10,marginBottom:12}}>
+                  {preview.map(t => {
+                    const isParcela = !!t.description.match(/\d{1,2}\/\d{1,2}/)
+                    return (
+                      <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderBottom:'1px solid var(--gray-100)',fontSize:12}}>
+                        <span style={{fontSize:10,padding:'2px 6px',borderRadius:8,background:isParcela?'var(--purple-light)':'var(--amber-light)',color:isParcela?'var(--purple)':'var(--amber)',fontWeight:600,whiteSpace:'nowrap'}}>
+                          {isParcela ? '📅 parcela' : '🛒 avulso'}
+                        </span>
+                        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.description}</span>
+                        <span style={{fontWeight:600,color:'var(--red)',whiteSpace:'nowrap'}}>{fmt(t.amount)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Botões de ação */}
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  {avulsosCount > 0 && (
+                    <button
+                      onClick={excluirSoAvulsos}
+                      disabled={loading}
+                      style={{padding:'9px 16px',background:'#FFF3E0',color:'#E65100',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:13,fontWeight:600,cursor:'pointer'}}
+                    >
+                      🛒 Excluir só avulsos ({avulsosCount})
+                    </button>
+                  )}
+                  <button
+                    onClick={excluirMes}
+                    disabled={loading}
+                    style={{padding:'9px 16px',background:'#FCEBEB',color:'#A32D2D',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:13,fontWeight:600,cursor:'pointer'}}
+                  >
+                    🗑️ Excluir tudo de {fmtM(mesSel)} ({preview.length})
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </ConfigSection>
+  )
+}
+
 function Configuracoes({ toast }) {
   const {categories,cards,members,reloadGlobal}=useApp()
   const [newCatName,setNewCatName]=useState('')
@@ -1317,24 +1469,7 @@ function Configuracoes({ toast }) {
           </div>
         </ConfigSection>
 
-        <ConfigSection title="🗑️ Dados">
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            <button className="btn-secondary" onClick={async()=>{
-              if(!window.confirm('Limpar lançamentos do mês atual?')) return
-              const mesAtual=new Date().toISOString().slice(0,7)
-              await supabase.from('installments').delete().eq('month_ref',mesAtual)
-              await supabase.from('transactions').delete().eq('month_ref',mesAtual)
-              window.location.reload()
-            }}>🗓️ Limpar mês atual</button>
-            <button style={{padding:'10px 18px',background:'#FCEBEB',color:'#A32D2D',border:'none',borderRadius:8,fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,cursor:'pointer'}} onClick={async()=>{
-              if(!window.confirm('⚠️ Apagar TODOS os lançamentos? Esta ação não pode ser desfeita.')) return
-              if(!window.confirm('Tem certeza? Todos os meses serão apagados.')) return
-              await supabase.from('installments').delete().neq('id','00000000-0000-0000-0000-000000000000')
-              await supabase.from('transactions').delete().neq('id','00000000-0000-0000-0000-000000000000')
-              window.location.reload()
-            }}>🗑️ Limpar tudo</button>
-          </div>
-        </ConfigSection>
+        <ConfigSectionDados toast={toast}/>
         <div style={{padding:'0 16px'}}><div style={{background:'var(--gray-100)',borderRadius:8,padding:'12px 14px',fontSize:12,color:'var(--gray-500)',lineHeight:1.6}}>💡 <strong>Dica mobile:</strong> Abra no Safari/Chrome → "Compartilhar" → "Adicionar à Tela de Início".</div></div>
       </div>
     </div>
