@@ -653,7 +653,7 @@ function ImportarJSON({ mes, toast }) {
   const [manualMonth,setManualMonth]=useState(mes)
   const catNames=categories.filter(c=>c.type==='despesa').map(c=>c.name)
   const cardInfo=cards.find(c=>c.name===selectedCardName)
-
+ 
   const processar=()=>{
     try{
       const obj=JSON.parse(json)
@@ -672,14 +672,208 @@ function ImportarJSON({ mes, toast }) {
       const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
-
-    const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
+ 
+  const importar = async () => {
+    const toImport = parsed.filter((_, i) => selected[i])
+    if (!toImport.length) { toast('Selecione pelo menos um', 'error'); return }
+    setLoading(true); setProgress('Verificando lançamentos existentes...')
+ 
+    // ── 1. Buscar o que já existe nos meses envolvidos ──────────────────────
+    const mesesEnvolvidos = [...new Set(toImport.map(t => t.targetMes))]
+    const { data: existingTxns } = await supabase
+      .from('transactions')
+      .select('id,description,amount,month_ref')
+      .in('month_ref', mesesEnvolvidos)
+ 
+    // Chave SEM o valor. A parcela futura criada pelo app é estimada e a
+    // fatura real diverge centavos por arredondamento (ex: 172,59 vs 172,57).
+    // Incluir o valor na chave fazia a dedup falhar e duplicar o lançamento.
+    const existingMap = new Map(
+      (existingTxns || []).map(t => [`${t.description}|${t.month_ref}`, t])
+    )
+ 
+    const novos = []
+    const corrigir = []
+    toImport.forEach(t => {
+      const ex = existingMap.get(`${t.description}|${t.targetMes}`)
+      if (!ex) { novos.push(t); return }
+      // Já existe: se o valor real difere do estimado, corrige em vez de duplicar
+      if (Math.abs(Number(ex.amount) - Number(t.amount)) > 0.001) {
+        corrigir.push({ id: ex.id, amount: t.amount, date: t.date })
+      }
+    })
+ 
+    // ── 2. Corrigir valores estimados com o valor real da fatura ────────────
+    if (corrigir.length > 0) {
+      setProgress(`Corrigindo ${corrigir.length} valor(es) estimado(s)...`)
+      for (const c of corrigir) {
+        await supabase.from('transactions')
+          .update({ amount: c.amount, date: c.date, notes: '' })
+          .eq('id', c.id)
+        await supabase.from('installments')
+          .update({ installment_amount: c.amount })
+          .eq('transaction_id', c.id)
+      }
+    }
+ 
+    const identicos = toImport.length - novos.length - corrigir.length
+ 
+    if (novos.length === 0) {
+      const partes = []
+      if (corrigir.length) partes.push(`${corrigir.length} valor(es) corrigido(s)`)
+      if (identicos) partes.push(`${identicos} já idêntico(s)`)
+      toast(`Nenhum lançamento novo. ${partes.join(', ')}.`, 'success')
+      setLoading(false); setProgress(''); return
+    }
+ 
+    setProgress('Inserindo lançamentos...')
+ 
+    // ── 3. Inserir apenas os lançamentos realmente novos ────────────────────
+    const txnRows = novos.map(t => ({
+      date: t.date,
+      description: t.description,
+      type: 'cartao',
+      category: t.category || 'Outros',
+      member: t.member || '',
+      card: t.card || selectedCardName,
+      installments: t.installInfo ? t.installInfo.total : 1,
+      amount: t.amount,
+      notes: t.notes || '',
+      month_ref: t.targetMes
+    }))
+ 
+    const { data: inserted, error } = await supabase.from('transactions').insert(txnRows).select()
+    if (error) { toast('Erro: ' + error.message, 'error'); setLoading(false); setProgress(''); return }
+ 
+    setProgress('Criando parcelas futuras...')
+ 
+    // ── 4. Montar as parcelas futuras ───────────────────────────────────────
+    const allFutureTxns = []
+    const allInstallRows = []
+ 
+    novos.forEach((t, idx) => {
+      if (!t.installInfo) return
+      const groupId = crypto.randomUUID()
+      const descBase = t.description.replace(/\s*\d{1,2}\/\d{1,2}$/, '').trim()
+      const [y, m] = t.targetMes.split('-').map(Number)
+      const remainingCount = t.installInfo.total - t.installInfo.current
+ 
+      allInstallRows.push({
+        group_id: groupId,
+        description: descBase,
+        total_amount: t.amount * t.installInfo.total,
+        installment_amount: t.amount,
+        total_installments: t.installInfo.total,
+        current_installment: t.installInfo.current,
+        card: t.card || selectedCardName,
+        category: t.category || 'Outros',
+        member: t.member || '',
+        month_ref: t.targetMes,
+        transaction_id: inserted[idx]?.id || null
+      })
+ 
+      for (let i = 1; i <= remainingCount; i++) {
+        const futMes = new Date(y, m - 1 + i, 1).toISOString().slice(0, 7)
+        const parcelNum = t.installInfo.current + i
+        const futDesc = `${descBase} ${parcelNum}/${t.installInfo.total}`
+        allFutureTxns.push({
+          _groupId: groupId,
+          _parcelNum: parcelNum,
+          _descBase: descBase,
+          _total: t.installInfo.total,
+          _amount: t.amount,
+          date: t.date,
+          description: futDesc,
+          type: 'cartao',
+          category: t.category || 'Outros',
+          member: t.member || '',
+          card: t.card || selectedCardName,
+          installments: t.installInfo.total,
+          amount: t.amount,
+          notes: 'Parcela futura (valor estimado)',
+          month_ref: futMes
+        })
+      }
+    })
+ 
+    // ── 5. Inserir parcelas futuras, pulando as que já existem ──────────────
+    let futureInserted = []
+    if (allFutureTxns.length > 0) {
+      setProgress('Verificando parcelas futuras já criadas...')
+ 
+      // Checa em transactions (e não em installments) porque é lá que a
+      // duplicata de fato apareceria no extrato e no total do mês.
+      const mesesFuturos = [...new Set(allFutureTxns.map(t => t.month_ref))]
+      const { data: existingFut } = await supabase
+        .from('transactions')
+        .select('description,month_ref')
+        .in('month_ref', mesesFuturos)
+ 
+      const existingFutKeys = new Set(
+        (existingFut || []).map(e => `${e.description}|${e.month_ref}`)
+      )
+ 
+      const newFutureTxns = allFutureTxns.filter(
+        t => !existingFutKeys.has(`${t.description}|${t.month_ref}`)
+      )
+ 
+      if (newFutureTxns.length > 0) {
+        setProgress(`Inserindo ${newFutureTxns.length} parcelas futuras...`)
+        const txnOnly = newFutureTxns.map(
+          ({ _groupId, _parcelNum, _descBase, _total, _amount, ...rest }) => rest
+        )
+ 
+        for (let i = 0; i < txnOnly.length; i += 50) {
+          const batch = txnOnly.slice(i, i + 50)
+          const { data: batchInserted } = await supabase.from('transactions').insert(batch).select()
+          if (batchInserted) futureInserted = [...futureInserted, ...batchInserted]
+        }
+ 
+        newFutureTxns.forEach((t, i) => {
+          if (futureInserted[i]) {
+            allInstallRows.push({
+              group_id: t._groupId,
+              description: t._descBase,
+              total_amount: t._amount * t._total,
+              installment_amount: t._amount,
+              total_installments: t._total,
+              current_installment: t._parcelNum,
+              card: t.card || selectedCardName,
+              category: t.category || 'Outros',
+              member: t.member || '',
+              month_ref: t.month_ref,
+              transaction_id: futureInserted[i].id
+            })
+          }
+        })
+      }
+    }
+ 
+    // ── 6. Registrar as parcelas ────────────────────────────────────────────
+    if (allInstallRows.length > 0) {
+      setProgress('Registrando parcelas...')
+      for (let i = 0; i < allInstallRows.length; i += 50) {
+        await supabase.from('installments').insert(allInstallRows.slice(i, i + 50))
+      }
+    }
+ 
+    setLoading(false); setProgress('')
+ 
+    const extras = []
+    if (corrigir.length) extras.push(`${corrigir.length} valor(es) corrigido(s)`)
+    if (identicos) extras.push(`${identicos} já existia(m)`)
+    const msgExtra = extras.length ? ` (${extras.join(', ')})` : ''
+    toast(
+      `${inserted.length} lançamentos + ${futureInserted.length} parcelas futuras importados!${msgExtra}`,
+      'success'
+    )
+    setJson(''); setParsed(null); setSelected({})
   }
-
+ 
   const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
   const nParcelados=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.isInstallment).length:0
   const nFuturas=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.installInfo).reduce((s,t)=>s+(t.installInfo.total-t.installInfo.current),0):0
-
+ 
   return (
     <div>
       <div className="page-header"><h1>Importar fatura</h1><div className="subtitle">Cole o JSON extraído pelo Claude</div></div>
@@ -716,16 +910,19 @@ function ImportarJSON({ mes, toast }) {
         </div>
         <button className="btn-primary" style={{marginBottom:0}} onClick={processar}>Visualizar lançamentos</button>
       </div>
-
+ 
       {parsed&&(
         <div className="form-card" style={{marginTop:0}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
             <span style={{fontSize:14,fontWeight:600}}>{parsed.filter((_,i)=>selected[i]).length}/{parsed.length} selecionados</span>
             <span style={{fontSize:13,fontWeight:700,color:'var(--green)'}}>{fmt(total)}</span>
           </div>
+          <div style={{background:'var(--blue-light)',borderRadius:8,padding:'8px 12px',fontSize:11,color:'var(--blue)',marginBottom:10,lineHeight:1.5}}>
+            ℹ️ Este total é o bruto do JSON. Lançamentos que já existem no mês serão ignorados ou terão o valor corrigido — o total final do mês pode ser menor.
+          </div>
           {nParcelados>0&&(
             <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:10}}>
-              💳 <strong>{nParcelados}</strong> parcelado(s) → <strong>{nFuturas}</strong> parcelas futuras serão criadas. Na próxima fatura os valores reais serão atualizados sem duplicar.
+              💳 <strong>{nParcelados}</strong> parcelado(s) → até <strong>{nFuturas}</strong> parcelas futuras. As que já existirem não serão duplicadas.
             </div>
           )}
           <label style={{fontSize:13,display:'flex',alignItems:'center',gap:6,cursor:'pointer',marginBottom:10}}>
@@ -756,14 +953,13 @@ function ImportarJSON({ mes, toast }) {
             </div>
           )}
           <button className="btn-primary" onClick={importar} disabled={loading}>
-            {loading?'Importando...':'✓ Importar '+parsed.filter((_,i)=>selected[i]).length+' lançamentos'+(nFuturas>0?' + '+nFuturas+' parcelas futuras':'')}
+            {loading?'Importando...':'✓ Importar '+parsed.filter((_,i)=>selected[i]).length+' lançamentos'}
           </button>
         </div>
       )}
     </div>
   )
 }
-
 // ── PARCELAS ──────────────────────────────────────────────────────────────────
 function Parcelas({ mes, setMes }) {
   const [parcelas,setParcelas]=useState([])
