@@ -742,15 +742,25 @@ function ImportarJSON({ mes, toast }) {
 
     // Chave SEM o valor: a parcela futura criada pelo app é estimada e a
     // fatura real diverge centavos por arredondamento.
-    const existingMap = new Map(
-      (existingTxns || []).map(t => [`${t.description}|${t.month_ref}`, t])
-    )
+    // A mesma descrição pode repetir no mês (ex: 8x "IOF Compra Internacional"),
+    // então cada registro existente é consumido UMA única vez — o que sobrar
+    // do JSON entra como lançamento novo.
+    const existingMap = new Map()
+    ;(existingTxns || []).forEach(t => {
+      const k = `${t.description}|${t.month_ref}`
+      if (!existingMap.has(k)) existingMap.set(k, [])
+      existingMap.get(k).push(t)
+    })
 
     const novos = []
     const corrigir = []
     toImport.forEach(t => {
-      const ex = existingMap.get(`${t.description}|${t.targetMes}`)
-      if (!ex) { novos.push(t); return }
+      const fila = existingMap.get(`${t.description}|${t.targetMes}`)
+      if (!fila || fila.length === 0) { novos.push(t); return }
+      // Prefere o registro de valor idêntico; senão consome o primeiro da fila
+      let i = fila.findIndex(e => Math.abs(Number(e.amount) - Number(t.amount)) <= 0.001)
+      if (i === -1) i = 0
+      const ex = fila.splice(i, 1)[0]
       if (Math.abs(Number(ex.amount) - Number(t.amount)) > 0.001) {
         corrigir.push({ id: ex.id, amount: t.amount, date: t.date })
       }
@@ -851,13 +861,18 @@ function ImportarJSON({ mes, toast }) {
         .select('description,month_ref')
         .in('month_ref', mesesFuturos)
 
-      const existingFutKeys = new Set(
-        (existingFut || []).map(e => `${e.description}|${e.month_ref}`)
-      )
+      const futCount = new Map()
+      ;(existingFut || []).forEach(e => {
+        const k = `${e.description}|${e.month_ref}`
+        futCount.set(k, (futCount.get(k) || 0) + 1)
+      })
 
-      const newFutureTxns = allFutureTxns.filter(
-        t => !existingFutKeys.has(`${t.description}|${t.month_ref}`)
-      )
+      const newFutureTxns = allFutureTxns.filter(t => {
+        const k = `${t.description}|${t.month_ref}`
+        const n = futCount.get(k) || 0
+        if (n > 0) { futCount.set(k, n - 1); return false }
+        return true
+      })
 
       if (newFutureTxns.length > 0) {
         setProgress(`Inserindo ${newFutureTxns.length} parcelas futuras...`)
