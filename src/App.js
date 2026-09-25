@@ -140,7 +140,8 @@ function Dashboard({ mes, setMes }) {
   const [txns,setTxns]=useState([])
   const [loading,setLoading]=useState(true)
   const [futureParcelas,setFutureParcelas]=useState([])
-  const [chartType,setChartType]=useState('barras') // 'barras' ou 'pizza'
+  const [chartType,setChartType]=useState('barras')
+  const [verEstornos,setVerEstornos]=useState(false)
   const desktop=useDesktop()
 
   const load=useCallback(async()=>{
@@ -167,16 +168,24 @@ function Dashboard({ mes, setMes }) {
   },[mes])
 
   const receitas=txns.filter(t=>t.type==='receita').reduce((s,t)=>s+Number(t.amount),0)
-  const despesas=txns.filter(t=>t.type!=='receita').reduce((s,t)=>s+Number(t.amount),0)
+  // Estornos = lançamentos de despesa com valor negativo (devoluções da fatura)
+  const listaEstornos=txns.filter(t=>t.type!=='receita'&&Number(t.amount)<0)
+  const estornos=listaEstornos.reduce((s,t)=>s+Number(t.amount),0)   // valor negativo
+  const despesasBrutas=txns.filter(t=>t.type!=='receita'&&Number(t.amount)>0).reduce((s,t)=>s+Number(t.amount),0)
+  const despesas=despesasBrutas+estornos                              // líquido
   const saldo=receitas-despesas
-  const cartao=txns.filter(t=>t.type==='cartao').reduce((s,t)=>s+Number(t.amount),0)
+  const cartaoBruto=txns.filter(t=>t.type==='cartao'&&Number(t.amount)>0).reduce((s,t)=>s+Number(t.amount),0)
+  const cartaoEstorno=txns.filter(t=>t.type==='cartao'&&Number(t.amount)<0).reduce((s,t)=>s+Number(t.amount),0)
+  const cartao=cartaoBruto+cartaoEstorno
+  const nCartao=txns.filter(t=>t.type==='cartao'&&Number(t.amount)>0).length
 
-  const byCat={};txns.filter(t=>t.type!=='receita').forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+Number(t.amount)})
+  // Gráficos usam só valores positivos (estornos entram como linha própria)
+  const byCat={};txns.filter(t=>t.type!=='receita'&&Number(t.amount)>0).forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+Number(t.amount)})
   const catEntries=Object.entries(byCat).sort((a,b)=>b[1]-a[1])
   const maxCat=catEntries[0]?.[1]||1
   const catPizzaData=catEntries.slice(0,8).map(([label,value])=>({label,value}))
 
-  const byMember={};txns.filter(t=>t.type!=='receita').forEach(t=>{const k=t.member||'Família';byMember[k]=(byMember[k]||0)+Number(t.amount)})
+  const byMember={};txns.filter(t=>t.type!=='receita'&&Number(t.amount)>0).forEach(t=>{const k=t.member||'Família';byMember[k]=(byMember[k]||0)+Number(t.amount)})
   const memberEntries=Object.entries(byMember).sort((a,b)=>b[1]-a[1])
   const memberPizzaData=memberEntries.map(([label,value])=>({label,value}))
 
@@ -197,13 +206,53 @@ function Dashboard({ mes, setMes }) {
       {loading?<div className="loading"><div className="spinner"/></div>:<>
         <div className="metrics-grid">
           <div className="metric-card green"><div className="label">Receitas</div><div className="value">{fmt(receitas)}</div></div>
-          <div className="metric-card red"><div className="label">Despesas</div><div className="value">{fmt(despesas)}</div></div>
+          <div className="metric-card red">
+            <div className="label">Despesas</div>
+            <div className="value">{fmt(despesas)}</div>
+            {estornos<0&&<div className="sub">bruto {fmt(despesasBrutas)} − estornos {fmt(Math.abs(estornos))}</div>}
+          </div>
           <div className="metric-card" style={{background:saldo>=0?'var(--green-pale)':'var(--red-light)',border:`1px solid ${saldo>=0?'#c0e8d0':'#f5c6c2'}`}}>
             <div className="label" style={{color:saldo>=0?'var(--green)':'var(--red)'}}>Saldo</div>
             <div className="value" style={{color:saldo>=0?'var(--green)':'var(--red)',fontSize:20}}>{fmt(saldo)}</div>
           </div>
-          <div className="metric-card amber"><div className="label">Cartão</div><div className="value">{fmt(cartao)}</div><div className="sub">{txns.filter(t=>t.type==='cartao').length} lançamentos</div></div>
+          <div className="metric-card amber">
+            <div className="label">Cartão</div>
+            <div className="value">{fmt(cartao)}</div>
+            <div className="sub">{nCartao} lançamentos{cartaoEstorno<0?` · ${listaEstornos.length} estorno(s)`:''}</div>
+          </div>
         </div>
+
+        {/* ── Painel de conferência dos estornos ── */}
+        {listaEstornos.length>0&&(
+          <div className="section">
+            <div
+              onClick={()=>setVerEstornos(v=>!v)}
+              style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'var(--green-pale)',border:'1px solid #c0e8d0',borderRadius:12,padding:'10px 14px',cursor:'pointer'}}
+            >
+              <span style={{fontSize:13,fontWeight:600,color:'var(--green)'}}>
+                ↩️ {listaEstornos.length} estorno(s) descontado(s) da fatura
+              </span>
+              <span style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:14,fontWeight:700,color:'var(--green)'}}>{fmt(Math.abs(estornos))}</span>
+                <span style={{fontSize:12,color:'var(--green)'}}>{verEstornos?'▲':'▼'}</span>
+              </span>
+            </div>
+            {verEstornos&&(
+              <div className="chart-card" style={{marginTop:8,padding:'10px 14px'}}>
+                <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:8,lineHeight:1.5}}>
+                  Devoluções e cancelamentos abatidos do total. Despesas bruto {fmt(despesasBrutas)} − {fmt(Math.abs(estornos))} = <strong>{fmt(despesas)}</strong>
+                </div>
+                {listaEstornos.map(e=>(
+                  <div key={e.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--gray-100)'}}>
+                    <span style={{color:'var(--gray-700)',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.description}</span>
+                    <span style={{color:'var(--gray-500)',fontSize:11,marginRight:10}}>{e.date?.slice(5).replace('-','/')}</span>
+                    <span style={{fontWeight:600,color:'var(--green)',whiteSpace:'nowrap'}}>+{fmt(Math.abs(e.amount))}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {futureParcelas.length>0&&(
           <div className="section">
@@ -254,7 +303,7 @@ function Dashboard({ mes, setMes }) {
                             <div className="cat-bar-val">{fmt(val)}</div>
                           </div>
                         ))
-                      : <PizzaChart data={catPizzaData} colors={CAT_COLORS} total={despesas}/>
+                      : <PizzaChart data={catPizzaData} colors={CAT_COLORS} total={despesasBrutas}/>
                     }
                   </div>
                 </div>
@@ -267,11 +316,11 @@ function Dashboard({ mes, setMes }) {
                       ? memberEntries.map(([mbr,val],i)=>(
                           <div className="cat-bar-row" key={mbr}>
                             <div className="cat-bar-name">{mbr}</div>
-                            <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
+                            <div className="cat-bar-bg"><div className="cat-bar-fill" style={{width:`${(val/despesasBrutas*100).toFixed(1)}%`,background:CAT_COLORS[(i+4)%CAT_COLORS.length]}}/></div>
                             <div className="cat-bar-val">{fmt(val)}</div>
                           </div>
                         ))
-                      : <PizzaChart data={memberPizzaData} colors={CAT_COLORS.slice(4)} total={despesas}/>
+                      : <PizzaChart data={memberPizzaData} colors={CAT_COLORS.slice(4)} total={despesasBrutas}/>
                     }
                   </div>
                 </div>
@@ -284,22 +333,25 @@ function Dashboard({ mes, setMes }) {
           <div className="section-title">Últimos lançamentos</div>
           {txns.length===0
             ?<div className="empty-state"><div className="icon">📭</div><h3>Nenhum lançamento</h3><p>Use "Lançar" para adicionar.</p></div>
-            :<div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>(
+            :<div className="txn-list">{txns.slice(0,desktop?10:6).map(t=>{
+              const neg=Number(t.amount)<0
+              return(
               <div className="txn-item" key={t.id}>
-                <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+                <div className="txn-icon" style={{background:neg?'#e8f5ee':TIPO_BG[t.type]}}>{neg?'↩️':TIPO_ICONS[t.type]}</div>
                 <div className="txn-info">
                   <div className="txn-desc">{t.description}</div>
                   <div className="txn-meta">{t.category} · {t.date?.slice(5).replace('-','/')}</div>
                 </div>
-                <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+                <div className={`txn-amount ${(t.type==='receita'||neg)?'income':'expense'}`}>{(t.type==='receita'||neg)?'+':'-'}{fmt(Math.abs(t.amount))}</div>
               </div>
-            ))}</div>
+            )})}</div>
           }
         </div>
       </>}
     </div>
   )
 }
+
 
 // ── EXTRATO ───────────────────────────────────────────────────────────────────
 function Lancamentos({ mes, setMes, toast }) {
@@ -410,13 +462,15 @@ function Lancamentos({ mes, setMes, toast }) {
                 <span style={{fontSize:13,fontWeight:700,color:total>=0?'var(--green)':'var(--red)'}}>{total>=0?'+':''}{fmt(total)}</span>
               </div>
               <div className="txn-list">
-                {filtered.map(t=>(
+                {filtered.map(t=>{
+                  const neg=Number(t.amount)<0
+                  return(
                   <div className="txn-item" key={t.id}>
-                    <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+                    <div className="txn-icon" style={{background:neg?'#e8f5ee':TIPO_BG[t.type]}}>{neg?'↩️':TIPO_ICONS[t.type]}</div>
                     <div className="txn-info">
                       <div className="txn-desc" onClick={()=>openEdit(t)} style={{cursor:'pointer'}}>{t.description}</div>
                       <div className="txn-meta" style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
-                        <span className={`badge badge-${t.type}`}>{TIPO_LABELS[t.type]}</span>
+                        <span className={`badge badge-${t.type}`}>{neg?'Estorno':TIPO_LABELS[t.type]}</span>
                         {/* Categoria clicável inline */}
                         <select
                           value={t.category||''}
@@ -427,19 +481,19 @@ function Lancamentos({ mes, setMes, toast }) {
                           {todasCats.map(c=><option key={c} value={c}>{c}</option>)}
                         </select>
                         {t.member&&<span style={{color:'var(--gray-400)',fontSize:11}}>· {t.member}</span>}
-                        {t.installments>1&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20}}>{t.installments}x</span>}
+                        {t.installments>1&&!neg&&<span style={{background:'var(--purple-light)',color:'var(--purple)',fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:20}}>{t.installments}x</span>}
                         <span style={{fontSize:11,fontWeight:600,color:'var(--blue)',background:'var(--blue-light)',padding:'1px 6px',borderRadius:10}}>{fmtDate(t.date)}</span>
                       </div>
                     </div>
                     <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
-                      <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+                      <div className={`txn-amount ${(t.type==='receita'||neg)?'income':'expense'}`}>{(t.type==='receita'||neg)?'+':'-'}{fmt(Math.abs(t.amount))}</div>
                       <div style={{display:'flex',gap:4}}>
                         <button style={{padding:'3px 8px',fontSize:11,background:'var(--blue-light)',color:'var(--blue)',border:'none',borderRadius:6,cursor:'pointer'}} onClick={()=>openEdit(t)}>✏️</button>
                         <button className="btn-danger" style={{padding:'3px 8px',fontSize:11}} onClick={()=>del(t.id)}>✕</button>
                       </div>
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
             </>
           }
@@ -454,7 +508,7 @@ function Lancamentos({ mes, setMes, toast }) {
             <input className="form-input" value={editTxn.description} onChange={e=>setEditTxn(v=>({...v,description:e.target.value}))}/>
           </div>
           <div className="form-row">
-            <div className="form-group"><label className="form-label">Valor</label>
+            <div className="form-group"><label className="form-label">Valor <span style={{color:'var(--gray-500)',fontSize:10}}>(negativo = estorno)</span></label>
               <input type="number" className="form-input" value={editTxn.amount} onChange={e=>setEditTxn(v=>({...v,amount:e.target.value}))}/>
             </div>
             <div className="form-group"><label className="form-label">Data</label>
@@ -653,57 +707,55 @@ function ImportarJSON({ mes, toast }) {
   const [manualMonth,setManualMonth]=useState(mes)
   const catNames=categories.filter(c=>c.type==='despesa').map(c=>c.name)
   const cardInfo=cards.find(c=>c.name===selectedCardName)
- 
+
   const processar=()=>{
     try{
       const obj=JSON.parse(json)
       const arr=obj.transactions||obj
       if(!Array.isArray(arr)||!arr.length) throw new Error('Nenhuma transação encontrada')
-      const valid=arr.filter(t=>t.amount>0&&t.description)
+      // Aceita valores negativos (estornos/devoluções); descarta apenas zerados
+      const valid=arr.filter(t=>Number(t.amount)!==0&&t.description)
       if(!valid.length) throw new Error('Nenhum lançamento válido')
       const enriched=valid.map(t=>{
-        const installInfo=parseInstallment(t.description)
+        const isEstorno=Number(t.amount)<0
+        const installInfo=isEstorno?null:parseInstallment(t.description)
         const targetMes=useAutoMonth&&cardInfo?.closing_day
           ? calcMonthRef(t.date, cardInfo.closing_day, null)
           : manualMonth
-        return { ...t, installInfo, targetMes, isInstallment:!!installInfo }
+        return { ...t, installInfo, targetMes, isInstallment:!!installInfo, isEstorno }
       })
       setParsed(enriched)
       const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
     }catch(e){toast('Erro: '+e.message,'error')}
   }
- 
+
   const importar = async () => {
     const toImport = parsed.filter((_, i) => selected[i])
     if (!toImport.length) { toast('Selecione pelo menos um', 'error'); return }
     setLoading(true); setProgress('Verificando lançamentos existentes...')
- 
-    // ── 1. Buscar o que já existe nos meses envolvidos ──────────────────────
+
     const mesesEnvolvidos = [...new Set(toImport.map(t => t.targetMes))]
     const { data: existingTxns } = await supabase
       .from('transactions')
       .select('id,description,amount,month_ref')
       .in('month_ref', mesesEnvolvidos)
- 
-    // Chave SEM o valor. A parcela futura criada pelo app é estimada e a
-    // fatura real diverge centavos por arredondamento (ex: 172,59 vs 172,57).
-    // Incluir o valor na chave fazia a dedup falhar e duplicar o lançamento.
+
+    // Chave SEM o valor: a parcela futura criada pelo app é estimada e a
+    // fatura real diverge centavos por arredondamento.
     const existingMap = new Map(
       (existingTxns || []).map(t => [`${t.description}|${t.month_ref}`, t])
     )
- 
+
     const novos = []
     const corrigir = []
     toImport.forEach(t => {
       const ex = existingMap.get(`${t.description}|${t.targetMes}`)
       if (!ex) { novos.push(t); return }
-      // Já existe: se o valor real difere do estimado, corrige em vez de duplicar
       if (Math.abs(Number(ex.amount) - Number(t.amount)) > 0.001) {
         corrigir.push({ id: ex.id, amount: t.amount, date: t.date })
       }
     })
- 
-    // ── 2. Corrigir valores estimados com o valor real da fatura ────────────
+
     if (corrigir.length > 0) {
       setProgress(`Corrigindo ${corrigir.length} valor(es) estimado(s)...`)
       for (const c of corrigir) {
@@ -715,9 +767,9 @@ function ImportarJSON({ mes, toast }) {
           .eq('transaction_id', c.id)
       }
     }
- 
+
     const identicos = toImport.length - novos.length - corrigir.length
- 
+
     if (novos.length === 0) {
       const partes = []
       if (corrigir.length) partes.push(`${corrigir.length} valor(es) corrigido(s)`)
@@ -725,10 +777,9 @@ function ImportarJSON({ mes, toast }) {
       toast(`Nenhum lançamento novo. ${partes.join(', ')}.`, 'success')
       setLoading(false); setProgress(''); return
     }
- 
+
     setProgress('Inserindo lançamentos...')
- 
-    // ── 3. Inserir apenas os lançamentos realmente novos ────────────────────
+
     const txnRows = novos.map(t => ({
       date: t.date,
       description: t.description,
@@ -737,27 +788,26 @@ function ImportarJSON({ mes, toast }) {
       member: t.member || '',
       card: t.card || selectedCardName,
       installments: t.installInfo ? t.installInfo.total : 1,
-      amount: t.amount,
-      notes: t.notes || '',
+      amount: t.amount,                                  // negativo = estorno
+      notes: t.notes || (t.isEstorno ? 'Estorno / devolução' : ''),
       month_ref: t.targetMes
     }))
- 
+
     const { data: inserted, error } = await supabase.from('transactions').insert(txnRows).select()
     if (error) { toast('Erro: ' + error.message, 'error'); setLoading(false); setProgress(''); return }
- 
+
     setProgress('Criando parcelas futuras...')
- 
-    // ── 4. Montar as parcelas futuras ───────────────────────────────────────
+
     const allFutureTxns = []
     const allInstallRows = []
- 
+
     novos.forEach((t, idx) => {
-      if (!t.installInfo) return
+      if (!t.installInfo) return    // estornos e à vista não geram parcelas
       const groupId = crypto.randomUUID()
       const descBase = t.description.replace(/\s*\d{1,2}\/\d{1,2}$/, '').trim()
       const [y, m] = t.targetMes.split('-').map(Number)
       const remainingCount = t.installInfo.total - t.installInfo.current
- 
+
       allInstallRows.push({
         group_id: groupId,
         description: descBase,
@@ -771,19 +821,15 @@ function ImportarJSON({ mes, toast }) {
         month_ref: t.targetMes,
         transaction_id: inserted[idx]?.id || null
       })
- 
+
       for (let i = 1; i <= remainingCount; i++) {
         const futMes = new Date(y, m - 1 + i, 1).toISOString().slice(0, 7)
         const parcelNum = t.installInfo.current + i
-        const futDesc = `${descBase} ${parcelNum}/${t.installInfo.total}`
         allFutureTxns.push({
-          _groupId: groupId,
-          _parcelNum: parcelNum,
-          _descBase: descBase,
-          _total: t.installInfo.total,
-          _amount: t.amount,
+          _groupId: groupId, _parcelNum: parcelNum, _descBase: descBase,
+          _total: t.installInfo.total, _amount: t.amount,
           date: t.date,
-          description: futDesc,
+          description: `${descBase} ${parcelNum}/${t.installInfo.total}`,
           type: 'cartao',
           category: t.category || 'Outros',
           member: t.member || '',
@@ -795,85 +841,76 @@ function ImportarJSON({ mes, toast }) {
         })
       }
     })
- 
-    // ── 5. Inserir parcelas futuras, pulando as que já existem ──────────────
+
     let futureInserted = []
     if (allFutureTxns.length > 0) {
       setProgress('Verificando parcelas futuras já criadas...')
- 
-      // Checa em transactions (e não em installments) porque é lá que a
-      // duplicata de fato apareceria no extrato e no total do mês.
       const mesesFuturos = [...new Set(allFutureTxns.map(t => t.month_ref))]
       const { data: existingFut } = await supabase
         .from('transactions')
         .select('description,month_ref')
         .in('month_ref', mesesFuturos)
- 
+
       const existingFutKeys = new Set(
         (existingFut || []).map(e => `${e.description}|${e.month_ref}`)
       )
- 
+
       const newFutureTxns = allFutureTxns.filter(
         t => !existingFutKeys.has(`${t.description}|${t.month_ref}`)
       )
- 
+
       if (newFutureTxns.length > 0) {
         setProgress(`Inserindo ${newFutureTxns.length} parcelas futuras...`)
         const txnOnly = newFutureTxns.map(
           ({ _groupId, _parcelNum, _descBase, _total, _amount, ...rest }) => rest
         )
- 
         for (let i = 0; i < txnOnly.length; i += 50) {
           const batch = txnOnly.slice(i, i + 50)
           const { data: batchInserted } = await supabase.from('transactions').insert(batch).select()
           if (batchInserted) futureInserted = [...futureInserted, ...batchInserted]
         }
- 
         newFutureTxns.forEach((t, i) => {
           if (futureInserted[i]) {
             allInstallRows.push({
-              group_id: t._groupId,
-              description: t._descBase,
-              total_amount: t._amount * t._total,
-              installment_amount: t._amount,
-              total_installments: t._total,
-              current_installment: t._parcelNum,
-              card: t.card || selectedCardName,
-              category: t.category || 'Outros',
-              member: t.member || '',
-              month_ref: t.month_ref,
+              group_id: t._groupId, description: t._descBase,
+              total_amount: t._amount * t._total, installment_amount: t._amount,
+              total_installments: t._total, current_installment: t._parcelNum,
+              card: t.card || selectedCardName, category: t.category || 'Outros',
+              member: t.member || '', month_ref: t.month_ref,
               transaction_id: futureInserted[i].id
             })
           }
         })
       }
     }
- 
-    // ── 6. Registrar as parcelas ────────────────────────────────────────────
+
     if (allInstallRows.length > 0) {
       setProgress('Registrando parcelas...')
       for (let i = 0; i < allInstallRows.length; i += 50) {
         await supabase.from('installments').insert(allInstallRows.slice(i, i + 50))
       }
     }
- 
+
     setLoading(false); setProgress('')
- 
+
+    const nEstornos = novos.filter(t => t.isEstorno).length
     const extras = []
+    if (nEstornos) extras.push(`${nEstornos} estorno(s)`)
     if (corrigir.length) extras.push(`${corrigir.length} valor(es) corrigido(s)`)
     if (identicos) extras.push(`${identicos} já existia(m)`)
     const msgExtra = extras.length ? ` (${extras.join(', ')})` : ''
-    toast(
-      `${inserted.length} lançamentos + ${futureInserted.length} parcelas futuras importados!${msgExtra}`,
-      'success'
-    )
+    toast(`${inserted.length} lançamentos + ${futureInserted.length} parcelas futuras importados!${msgExtra}`,'success')
     setJson(''); setParsed(null); setSelected({})
   }
- 
-  const total=parsed?parsed.filter((_,i)=>selected[i]).reduce((s,t)=>s+t.amount,0):0
-  const nParcelados=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.isInstallment).length:0
-  const nFuturas=parsed?parsed.filter((_,i)=>selected[i]&&parsed[i]?.installInfo).reduce((s,t)=>s+(t.installInfo.total-t.installInfo.current),0):0
- 
+
+  const sel=parsed?parsed.filter((_,i)=>selected[i]):[]
+  const bruto=sel.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0)
+  const estornos=sel.filter(t=>t.amount<0).reduce((s,t)=>s+t.amount,0)
+  const liquido=bruto+estornos
+  const nEstornos=sel.filter(t=>t.isEstorno).length
+  const nParcelados=sel.filter(t=>t.isInstallment).length
+  const nFuturas=sel.filter(t=>t.installInfo).reduce((s,t)=>s+(t.installInfo.total-t.installInfo.current),0)
+
   return (
     <div>
       <div className="page-header"><h1>Importar fatura</h1><div className="subtitle">Cole o JSON extraído pelo Claude</div></div>
@@ -910,16 +947,36 @@ function ImportarJSON({ mes, toast }) {
         </div>
         <button className="btn-primary" style={{marginBottom:0}} onClick={processar}>Visualizar lançamentos</button>
       </div>
- 
+
       {parsed&&(
         <div className="form-card" style={{marginTop:0}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontSize:14,fontWeight:600}}>{parsed.filter((_,i)=>selected[i]).length}/{parsed.length} selecionados</span>
-            <span style={{fontSize:13,fontWeight:700,color:'var(--green)'}}>{fmt(total)}</span>
+            <span style={{fontSize:14,fontWeight:600}}>{sel.length}/{parsed.length} selecionados</span>
+            <span style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{fmt(liquido)}</span>
           </div>
+
+          {/* Conferência com a fatura */}
+          <div style={{background:'var(--gray-50)',borderRadius:8,padding:'10px 12px',marginBottom:10,fontSize:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'2px 0'}}>
+              <span style={{color:'var(--gray-500)'}}>Despesas (bruto)</span>
+              <span style={{fontWeight:600}}>{fmt(bruto)}</span>
+            </div>
+            {estornos<0&&(
+              <div style={{display:'flex',justifyContent:'space-between',padding:'2px 0'}}>
+                <span style={{color:'var(--gray-500)'}}>↩️ Estornos ({nEstornos})</span>
+                <span style={{fontWeight:600,color:'var(--green)'}}>−{fmt(Math.abs(estornos))}</span>
+              </div>
+            )}
+            <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0 0',marginTop:4,borderTop:'1px solid var(--gray-100)'}}>
+              <span style={{fontWeight:700}}>Total líquido da fatura</span>
+              <span style={{fontWeight:700,color:'var(--green)'}}>{fmt(liquido)}</span>
+            </div>
+          </div>
+
           <div style={{background:'var(--blue-light)',borderRadius:8,padding:'8px 12px',fontSize:11,color:'var(--blue)',marginBottom:10,lineHeight:1.5}}>
-            ℹ️ Este total é o bruto do JSON. Lançamentos que já existem no mês serão ignorados ou terão o valor corrigido — o total final do mês pode ser menor.
+            ℹ️ Confira o total líquido acima com o valor da sua fatura. Lançamentos que já existem no mês serão ignorados ou terão o valor corrigido.
           </div>
+
           {nParcelados>0&&(
             <div style={{background:'var(--purple-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--purple)',marginBottom:10}}>
               💳 <strong>{nParcelados}</strong> parcelado(s) → até <strong>{nFuturas}</strong> parcelas futuras. As que já existirem não serão duplicadas.
@@ -933,15 +990,18 @@ function ImportarJSON({ mes, toast }) {
             <table className="preview-table">
               <thead><tr><th></th><th>Descrição</th><th>Cat.</th><th>Mês</th><th style={{textAlign:'right'}}>Valor</th></tr></thead>
               <tbody>{parsed.map((t,i)=>(
-                <tr key={i} style={{opacity:selected[i]?1:.4,background:t.isInstallment?'#f8f5ff':''}}>
+                <tr key={i} style={{opacity:selected[i]?1:.4,background:t.isEstorno?'#eefaf2':(t.isInstallment?'#f8f5ff':'')}}>
                   <td><input type="checkbox" checked={!!selected[i]} onChange={e=>setSelected(s=>({...s,[i]:e.target.checked}))}/></td>
                   <td style={{maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                     {t.description}
+                    {t.isEstorno&&<span style={{marginLeft:4,fontSize:10,background:'var(--green-pale)',color:'var(--green)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>estorno</span>}
                     {t.isInstallment&&<span style={{marginLeft:4,fontSize:10,background:'var(--purple-light)',color:'var(--purple)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>{t.installInfo.current}/{t.installInfo.total}x</span>}
                   </td>
                   <td><select className="select-native" value={t.category||'Outros'} onChange={e=>{const p=[...parsed];p[i]={...p[i],category:e.target.value};setParsed(p)}}>{catNames.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
                   <td style={{fontSize:11,color:'var(--gray-500)',whiteSpace:'nowrap'}}>{t.targetMes}</td>
-                  <td style={{textAlign:'right',fontWeight:600}}>{fmt(t.amount)}</td>
+                  <td style={{textAlign:'right',fontWeight:600,color:t.isEstorno?'var(--green)':'inherit'}}>
+                    {t.isEstorno?'−':''}{fmt(Math.abs(t.amount))}
+                  </td>
                 </tr>
               ))}</tbody>
             </table>
@@ -953,13 +1013,15 @@ function ImportarJSON({ mes, toast }) {
             </div>
           )}
           <button className="btn-primary" onClick={importar} disabled={loading}>
-            {loading?'Importando...':'✓ Importar '+parsed.filter((_,i)=>selected[i]).length+' lançamentos'}
+            {loading?'Importando...':'✓ Importar '+sel.length+' lançamentos'}
           </button>
         </div>
       )}
     </div>
   )
 }
+
+
 // ── PARCELAS ──────────────────────────────────────────────────────────────────
 function Parcelas({ mes, setMes }) {
   const [parcelas,setParcelas]=useState([])
@@ -984,13 +1046,6 @@ function Parcelas({ mes, setMes }) {
   parcelas.forEach(p=>{
     if(!byMes[p.month_ref]) byMes[p.month_ref]=[]
     byMes[p.month_ref].push(p)
-  })
-
-  // Agrupar por group_id para ver o total de cada compra
-  const groups={}
-  parcelas.forEach(p=>{
-    if(!groups[p.group_id]) groups[p.group_id]={desc:p.description,total:p.total_amount,installAmt:p.installment_amount,totalInst:p.total_installments,cat:p.category,card:p.card,meses:[]}
-    groups[p.group_id].meses.push(p.month_ref)
   })
 
   return (
@@ -1075,6 +1130,7 @@ function Orcamentos({ mes, setMes }) {
   },[mes])
   useEffect(()=>{ load() },[load])
 
+  // Estornos (valores negativos) abatem o gasto da categoria
   const spent={};txns.filter(t=>t.type!=='receita').forEach(t=>{spent[t.category]=(spent[t.category]||0)+Number(t.amount)})
   const saveBudget=async(cat,val)=>{
     const ex=budgets.find(b=>b.category===cat)
@@ -1092,7 +1148,7 @@ function Orcamentos({ mes, setMes }) {
         <div className="section" style={{paddingTop:12}}>
           {despCats.map(cat=>{
             const bud=budgets.find(b=>b.category===cat)?.amount||0
-            const sp=spent[cat]||0
+            const sp=Math.max(spent[cat]||0,0)
             const pct=bud>0?Math.min(sp/bud,1.2):0
             const color=sp>bud&&bud>0?'var(--red)':pct>.8?'var(--amber)':'var(--green)'
             const status=sp>bud&&bud>0?'🔴':pct>.8?'⚠️':bud>0?'✅':''
@@ -1199,13 +1255,15 @@ function Relatorios() {
           <button className="btn-secondary" onClick={search} disabled={searching}>{searching?'...':'🔍'}</button>
         </div>
         {results.length>0&&(
-          <div className="txn-list">{results.map(t=>(
+          <div className="txn-list">{results.map(t=>{
+            const neg=Number(t.amount)<0
+            return(
             <div className="txn-item" key={t.id}>
-              <div className="txn-icon" style={{background:TIPO_BG[t.type]}}>{TIPO_ICONS[t.type]}</div>
+              <div className="txn-icon" style={{background:neg?'#e8f5ee':TIPO_BG[t.type]}}>{neg?'↩️':TIPO_ICONS[t.type]}</div>
               <div className="txn-info"><div className="txn-desc">{t.description}</div><div className="txn-meta">{t.category} · {t.month_ref} · {t.date?.slice(5).replace('-','/')}</div></div>
-              <div className={`txn-amount ${t.type==='receita'?'income':'expense'}`}>{t.type==='receita'?'+':'-'}{fmt(t.amount)}</div>
+              <div className={`txn-amount ${(t.type==='receita'||neg)?'income':'expense'}`}>{(t.type==='receita'||neg)?'+':'-'}{fmt(Math.abs(t.amount))}</div>
             </div>
-          ))}</div>
+          )})}</div>
         )}
       </div>
     </div>
@@ -1331,12 +1389,8 @@ function ConfigSectionDados({ toast }) {
 
   const excluirSoAvulsos = async () => {
     if (!preview || preview.length === 0) return
-    // Avulsos = type !== 'cartao' OU type === 'cartao' mas installments = 1
-    // Mais simples: exclui os que não têm barra na descrição (não são parcelas)
-    const avulsos = preview.filter(t => {
-      const match = t.description.match(/\d{1,2}\/\d{1,2}/)
-      return !match
-    })
+    // Avulsos = os que NÃO têm padrão de parcela (N/N) na descrição
+    const avulsos = preview.filter(t => !t.description.match(/\d{1,2}\/\d{1,2}/))
     if (avulsos.length === 0) { toast('Nenhum lançamento avulso encontrado — todos parecem ser parcelas.', 'error'); return }
     if (!window.confirm(`Apagar ${avulsos.length} lançamento(s) avulso(s) de ${fmtM(mesSel)}?\n\nAs parcelas (ex: "02/12") serão mantidas.`)) return
     setLoading(true)
@@ -1350,7 +1404,9 @@ function ConfigSectionDados({ toast }) {
     setLoading(false)
   }
 
-  const totalPreview = preview ? preview.reduce((s, t) => s + Number(t.amount), 0) : 0
+  const bruto = preview ? preview.filter(t=>Number(t.amount)>0).reduce((s, t) => s + Number(t.amount), 0) : 0
+  const estornos = preview ? preview.filter(t=>Number(t.amount)<0).reduce((s, t) => s + Number(t.amount), 0) : 0
+  const totalPreview = bruto + estornos
   const avulsosCount = preview ? preview.filter(t => !t.description.match(/\d{1,2}\/\d{1,2}/)).length : 0
   const parcelasCount = preview ? preview.length - avulsosCount : 0
 
@@ -1405,18 +1461,24 @@ function ConfigSectionDados({ toast }) {
                   <span>💳 <strong>{parcelasCount}</strong> parcela(s)</span>
                   <span style={{marginLeft:'auto',fontWeight:700,color:'var(--red)'}}>Total: {fmt(totalPreview)}</span>
                 </div>
+                {estornos<0&&(
+                  <div style={{background:'var(--green-pale)',borderRadius:8,padding:'6px 12px',marginBottom:10,fontSize:12,color:'var(--green)'}}>
+                    ↩️ Inclui {fmt(Math.abs(estornos))} em estornos (bruto {fmt(bruto)})
+                  </div>
+                )}
 
                 {/* Lista */}
                 <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--gray-100)',borderRadius:10,marginBottom:12}}>
                   {preview.map(t => {
                     const isParcela = !!t.description.match(/\d{1,2}\/\d{1,2}/)
+                    const neg = Number(t.amount) < 0
                     return (
                       <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderBottom:'1px solid var(--gray-100)',fontSize:12}}>
-                        <span style={{fontSize:10,padding:'2px 6px',borderRadius:8,background:isParcela?'var(--purple-light)':'var(--amber-light)',color:isParcela?'var(--purple)':'var(--amber)',fontWeight:600,whiteSpace:'nowrap'}}>
-                          {isParcela ? '📅 parcela' : '🛒 avulso'}
+                        <span style={{fontSize:10,padding:'2px 6px',borderRadius:8,background:neg?'var(--green-pale)':(isParcela?'var(--purple-light)':'var(--amber-light)'),color:neg?'var(--green)':(isParcela?'var(--purple)':'var(--amber)'),fontWeight:600,whiteSpace:'nowrap'}}>
+                          {neg ? '↩️ estorno' : (isParcela ? '📅 parcela' : '🛒 avulso')}
                         </span>
                         <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.description}</span>
-                        <span style={{fontWeight:600,color:'var(--red)',whiteSpace:'nowrap'}}>{fmt(t.amount)}</span>
+                        <span style={{fontWeight:600,color:neg?'var(--green)':'var(--red)',whiteSpace:'nowrap'}}>{neg?'+':''}{fmt(Math.abs(t.amount))}</span>
                       </div>
                     )
                   })}
