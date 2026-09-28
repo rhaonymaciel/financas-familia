@@ -377,11 +377,40 @@ function Lancamentos({ mes, setMes, toast }) {
     toast('Removido','success')
   }
 
-  // Trocar categoria diretamente na linha sem abrir modal
+  // Extrai a base de uma parcela: "Calha Umida 3/10" -> {base:"Calha Umida", total:"10"}
+  const parcelaBase=(desc)=>{
+    const m=(desc||'').match(/^(.*?)\s(\d{1,2})\/(\d{1,2})$/)
+    return m ? { base:m[1], total:m[3] } : null
+  }
+
+  // Busca os ids de TODAS as parcelas da mesma compra, em todos os meses
+  const idsDoGrupo=async(base,total)=>{
+    const {data}=await supabase.from('transactions').select('id,description').ilike('description',`${base}%`)
+    const esc=base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+    const re=new RegExp('^'+esc+' \\d{1,2}\\/'+total+'$')
+    return (data||[]).filter(r=>re.test(r.description)).map(r=>r.id)
+  }
+
+  // Trocar categoria na linha. Se for parcela, aplica em todas as parcelas da compra.
   const changeCategory=async(id, newCat)=>{
-    await supabase.from('transactions').update({category:newCat}).eq('id',id)
-    setTxns(prev=>prev.map(t=>t.id===id?{...t,category:newCat}:t))
-    toast(`Categoria alterada para "${newCat}"!`,'success')
+    const alvo=txns.find(x=>x.id===id)
+    const pb=parcelaBase(alvo&&alvo.description)
+    if(!pb){
+      await supabase.from('transactions').update({category:newCat}).eq('id',id)
+      setTxns(prev=>prev.map(t=>t.id===id?{...t,category:newCat}:t))
+      toast(`Categoria alterada para "${newCat}"!`,'success')
+      return
+    }
+    const ids=await idsDoGrupo(pb.base,pb.total)
+    if(!ids.includes(id)) ids.push(id)
+    for(let i=0;i<ids.length;i+=100){
+      await supabase.from('transactions').update({category:newCat}).in('id',ids.slice(i,i+100))
+    }
+    await supabase.from('installments').update({category:newCat}).eq('description',pb.base)
+    setTxns(prev=>prev.map(t=>ids.includes(t.id)?{...t,category:newCat}:t))
+    toast(ids.length>1
+      ? `"${newCat}" aplicada nas ${ids.length} parcelas de ${pb.base}`
+      : `Categoria alterada para "${newCat}"!`,'success')
   }
 
   const openEdit=(t)=>{
@@ -411,8 +440,24 @@ function Lancamentos({ mes, setMes, toast }) {
     }
     const {error}=await supabase.from('transactions').update(updates).eq('id',targetId)
     if(error){toast('Erro: '+error.message,'error');return}
+
+    // Se for parcela, propaga categoria / tipo / membro para as demais parcelas
+    const orig=txns.find(x=>x.id===targetId)
+    const pb=parcelaBase(editTxn.description)
+    let nProp=0
+    if(pb&&orig&&(orig.category!==updates.category||orig.type!==updates.type||(orig.member||'')!==updates.member)){
+      const herdado={category:updates.category,type:updates.type,member:updates.member}
+      const ids=(await idsDoGrupo(pb.base,pb.total)).filter(x=>x!==targetId)
+      for(let i=0;i<ids.length;i+=100){
+        await supabase.from('transactions').update(herdado).in('id',ids.slice(i,i+100))
+      }
+      await supabase.from('installments')
+        .update({category:updates.category,member:updates.member}).eq('description',pb.base)
+      nProp=ids.length
+      setTxns(prev=>prev.map(t=>ids.includes(t.id)?{...t,...herdado}:t))
+    }
     setTxns(prev=>prev.map(t=>t.id===targetId?{...t,...updates}:t))
-    toast('Atualizado!','success')
+    toast(nProp>0?`Atualizado + ${nProp} parcela(s) do mesmo grupo!`:'Atualizado!','success')
     closeEdit()
   }
 
@@ -719,10 +764,15 @@ function ImportarJSON({ mes, toast }) {
       const enriched=valid.map(t=>{
         const isEstorno=Number(t.amount)<0
         const installInfo=isEstorno?null:parseInstallment(t.description)
-        const targetMes=useAutoMonth&&cardInfo?.closing_day
-          ? calcMonthRef(t.date, cardInfo.closing_day, null)
-          : manualMonth
-        return { ...t, installInfo, targetMes, isInstallment:!!installInfo, isEstorno }
+        // month_ref no próprio item permite importar VÁRIOS meses de uma vez
+        const targetMes = t.month_ref
+          ? t.month_ref
+          : (useAutoMonth&&cardInfo?.closing_day
+              ? calcMonthRef(t.date, cardInfo.closing_day, null)
+              : manualMonth)
+        // type no item permite lançar receita / conta fixa / variável / investimento
+        const tipo = t.type || 'cartao'
+        return { ...t, type:tipo, installInfo, targetMes, isInstallment:!!installInfo, isEstorno }
       })
       setParsed(enriched)
       const sel={}; enriched.forEach((_,i)=>sel[i]=true); setSelected(sel)
@@ -793,10 +843,10 @@ function ImportarJSON({ mes, toast }) {
     const txnRows = novos.map(t => ({
       date: t.date,
       description: t.description,
-      type: 'cartao',
+      type: t.type || 'cartao',
       category: t.category || 'Outros',
       member: t.member || '',
-      card: t.card || selectedCardName,
+      card: (t.type && t.type !== 'cartao') ? (t.card || 'N/A') : (t.card || selectedCardName),
       installments: t.installInfo ? t.installInfo.total : 1,
       amount: t.amount,                                  // negativo = estorno
       notes: t.notes || (t.isEstorno ? 'Estorno / devolução' : ''),
@@ -840,7 +890,7 @@ function ImportarJSON({ mes, toast }) {
           _total: t.installInfo.total, _amount: t.amount,
           date: t.date,
           description: `${descBase} ${parcelNum}/${t.installInfo.total}`,
-          type: 'cartao',
+          type: t.type || 'cartao',
           category: t.category || 'Outros',
           member: t.member || '',
           card: t.card || selectedCardName,
@@ -923,6 +973,8 @@ function ImportarJSON({ mes, toast }) {
   const estornos=sel.filter(t=>t.amount<0).reduce((s,t)=>s+t.amount,0)
   const liquido=bruto+estornos
   const nEstornos=sel.filter(t=>t.isEstorno).length
+  const porMes={}; sel.forEach(t=>{porMes[t.targetMes]=(porMes[t.targetMes]||0)+t.amount})
+  const mesesNoJson=Object.entries(porMes).sort(([a],[b])=>a.localeCompare(b))
   const nParcelados=sel.filter(t=>t.isInstallment).length
   const nFuturas=sel.filter(t=>t.installInfo).reduce((s,t)=>s+(t.installInfo.total-t.installInfo.current),0)
 
@@ -953,7 +1005,7 @@ function ImportarJSON({ mes, toast }) {
         </div>
         {!useAutoMonth&&(
           <div style={{background:'var(--amber-light)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'var(--amber)',marginBottom:12}}>
-            📅 Todos os lançamentos irão para <strong>{fmtM(manualMonth)}</strong> · Parcelas futuras serão criadas nos meses seguintes
+            📅 Lançamentos sem <code>month_ref</code> próprio irão para <strong>{fmtM(manualMonth)}</strong> · Parcelas futuras serão criadas nos meses seguintes
           </div>
         )}
         <div className="form-group">
@@ -969,6 +1021,18 @@ function ImportarJSON({ mes, toast }) {
             <span style={{fontSize:14,fontWeight:600}}>{sel.length}/{parsed.length} selecionados</span>
             <span style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{fmt(liquido)}</span>
           </div>
+
+          {/* Meses envolvidos, quando o JSON traz mais de um */}
+          {mesesNoJson.length>1&&(
+            <div style={{background:'var(--amber-light)',borderRadius:8,padding:'10px 12px',marginBottom:10,fontSize:12,color:'var(--amber)'}}>
+              <div style={{fontWeight:700,marginBottom:6}}>📅 {mesesNoJson.length} meses neste JSON</div>
+              {mesesNoJson.map(([m,v])=>(
+                <div key={m} style={{display:'flex',justifyContent:'space-between',padding:'2px 0'}}>
+                  <span>{fmtM(m)}</span><span style={{fontWeight:600}}>{fmt(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Conferência com a fatura */}
           <div style={{background:'var(--gray-50)',borderRadius:8,padding:'10px 12px',marginBottom:10,fontSize:12}}>
@@ -1010,6 +1074,7 @@ function ImportarJSON({ mes, toast }) {
                   <td style={{maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                     {t.description}
                     {t.isEstorno&&<span style={{marginLeft:4,fontSize:10,background:'var(--green-pale)',color:'var(--green)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>estorno</span>}
+                    {t.type&&t.type!=='cartao'&&<span style={{marginLeft:4,fontSize:10,background:TIPO_BG[t.type],color:'var(--gray-700)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>{TIPO_ICONS[t.type]} {TIPO_LABELS[t.type]}</span>}
                     {t.isInstallment&&<span style={{marginLeft:4,fontSize:10,background:'var(--purple-light)',color:'var(--purple)',padding:'1px 5px',borderRadius:10,whiteSpace:'nowrap'}}>{t.installInfo.current}/{t.installInfo.total}x</span>}
                   </td>
                   <td><select className="select-native" value={t.category||'Outros'} onChange={e=>{const p=[...parsed];p[i]={...p[i],category:e.target.value};setParsed(p)}}>{catNames.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
